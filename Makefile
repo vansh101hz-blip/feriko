@@ -6,47 +6,55 @@
 #   IOKit headers (in SDK)
 #
 # Usage:
-#   make              — build kext binary + rtw88ctl
+#   make              — build kext bundle + rtw88ctl  →  build/out/
 #   make kext         — build kext only
 #   make ctl          — build rtw88ctl only
-#   make install      — copy kext to /Library/Extensions and run kextutil
-#   make load         — kextload (unsigned, requires SIP disabled or AppleKextExcludeList override)
+#   make install      — copy build/out/rtw88.kext to /Library/Extensions
+#   make load         — kextutil (unsigned, requires SIP kext loading enabled)
 #   make unload       — kextunload
-#   make clean        — remove build artifacts
+#   make clean        — remove build/
 
 # ------------------------------------------------------------------ #
 # Paths                                                               #
 # ------------------------------------------------------------------ #
 
-PROJ_ROOT   := $(shell pwd)
-LINUX_SRC   := $(PROJ_ROOT)/../rtw88-stable/drivers/net/wireless/realtek/rtw88
-COMPAT_DIR  := $(PROJ_ROOT)/src/compat
-KEXT_SRC    := $(PROJ_ROOT)/src/kext
-BUILD_DIR   := $(PROJ_ROOT)/build
-CTL_DIR     := $(PROJ_ROOT)/ctl
+PROJ_ROOT    := $(shell pwd)
+LINUX_SRC    := $(PROJ_ROOT)/../rtw88-stable/drivers/net/wireless/realtek/rtw88
+COMPAT_DIR   := $(PROJ_ROOT)/src/compat
+KEXT_SRC     := $(PROJ_ROOT)/src/kext
+FIRMWARE_DIR := $(PROJ_ROOT)/firmware
+CTL_DIR      := $(PROJ_ROOT)/ctl
 
-KEXT_BUNDLE := $(PROJ_ROOT)/rtw88.kext
-KEXT_BIN    := $(KEXT_BUNDLE)/Contents/MacOS/rtw88
+BUILD_DIR    := $(PROJ_ROOT)/build
+OUT_DIR      := $(BUILD_DIR)/out
+
+# Source bundle: Info.plist + Resources skeleton (tracked in git)
+KEXT_SKEL    := $(PROJ_ROOT)/rtw88.kext
+
+# Output bundle: fully assembled kext ready for OpenCore / kextutil
+OUT_KEXT     := $(OUT_DIR)/rtw88.kext
+OUT_KEXT_BIN := $(OUT_KEXT)/Contents/MacOS/rtw88
+OUT_CTL      := $(OUT_DIR)/rtw88ctl
 
 # ------------------------------------------------------------------ #
 # Toolchain                                                           #
 # ------------------------------------------------------------------ #
 
-SDK         := $(shell xcrun --show-sdk-path)
-MKSDK       := $(PROJ_ROOT)/MacKernelSDK
-ARCH        := -arch x86_64
-MINOS       := -mmacosx-version-min=11.0
+SDK          := $(shell xcrun --show-sdk-path)
+MKSDK        := $(PROJ_ROOT)/MacKernelSDK
+ARCH         := -arch x86_64
+MINOS        := -mmacosx-version-min=11.0
 
-CC          := xcrun clang
-CXX         := xcrun clang++
-LD          := xcrun clang++
+CC           := xcrun clang
+CXX          := xcrun clang++
+LD           := xcrun clang++
 
-KEXT_FLAGS  := -fno-exceptions -fno-rtti \
-               -fno-stack-protector -mkernel \
-               $(ARCH) $(MINOS) \
-               -isysroot $(SDK) \
-               -I$(MKSDK)/Headers \
-               -I$(SDK)/System/Library/Frameworks/Kernel.framework/Headers
+KEXT_FLAGS   := -fno-exceptions -fno-rtti \
+                -fno-stack-protector -mkernel \
+                $(ARCH) $(MINOS) \
+                -isysroot $(SDK) \
+                -I$(MKSDK)/Headers \
+                -I$(SDK)/System/Library/Frameworks/Kernel.framework/Headers
 
 # Compat include path overrides ALL linux/ and net/ headers
 # so the Linux driver C files find our shims instead.
@@ -145,7 +153,7 @@ CHIP_SRCS := \
 COMPAT_SRCS := \
     $(COMPAT_DIR)/rtw88_compat.c
 
-# kmod_info.c — defines _kmod_info symbol (required by kmutil/kextutil)
+# kmod_info.c — defines _kmod_info (required by kmutil/kextutil)
 KMOD_SRCS := \
     $(KEXT_SRC)/kmod_info.c
 
@@ -161,11 +169,11 @@ KEXT_SRCS := \
 # Object files                                                         #
 # ------------------------------------------------------------------ #
 
-DRIVER_OBJS := $(patsubst $(LINUX_SRC)/%.c, $(BUILD_DIR)/driver/%.o, $(DRIVER_SRCS))
-CHIP_OBJS   := $(patsubst $(LINUX_SRC)/%.c, $(BUILD_DIR)/driver/%.o, $(CHIP_SRCS))
+DRIVER_OBJS := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(DRIVER_SRCS))
+CHIP_OBJS   := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(CHIP_SRCS))
 COMPAT_OBJS := $(patsubst $(COMPAT_DIR)/%.c, $(BUILD_DIR)/compat/%.o, $(COMPAT_SRCS))
-KMOD_OBJS   := $(patsubst $(KEXT_SRC)/%.c, $(BUILD_DIR)/kext/%.o, $(KMOD_SRCS))
-KEXT_OBJS   := $(patsubst $(KEXT_SRC)/%.cpp, $(BUILD_DIR)/kext/%.o, $(KEXT_SRCS))
+KMOD_OBJS   := $(patsubst $(KEXT_SRC)/%.c,   $(BUILD_DIR)/kext/%.o,   $(KMOD_SRCS))
+KEXT_OBJS   := $(patsubst $(KEXT_SRC)/%.cpp, $(BUILD_DIR)/kext/%.o,   $(KEXT_SRCS))
 
 ALL_OBJS    := $(DRIVER_OBJS) $(CHIP_OBJS) $(COMPAT_OBJS) $(KMOD_OBJS) $(KEXT_OBJS)
 
@@ -190,51 +198,58 @@ KEXT_LDFLAGS := \
 
 all: kext ctl
 
-kext: $(KEXT_BIN)
+kext: $(OUT_KEXT_BIN)
 
-$(KEXT_BIN): $(ALL_OBJS) | $(KEXT_BUNDLE)/Contents/MacOS
-	@echo "  LD  $@"
+# Link, then assemble the full kext bundle in build/out/
+$(OUT_KEXT_BIN): $(ALL_OBJS) | $(OUT_KEXT)/Contents/MacOS
+	@echo "  LD   $(notdir $@)"
 	$(LD) $(KEXT_LDFLAGS) -o $@ $(ALL_OBJS)
-	@echo "  Kext binary built: $@"
+	@echo "  SYNC $(OUT_KEXT)"
+	rsync -a --exclude='MacOS' $(KEXT_SKEL)/ $(OUT_KEXT)/
+	@if ls $(FIRMWARE_DIR)/*.bin 2>/dev/null | grep -q .; then \
+	    mkdir -p $(OUT_KEXT)/Contents/Resources; \
+	    cp $(FIRMWARE_DIR)/*.bin $(OUT_KEXT)/Contents/Resources/; \
+	    echo "  FW   copied firmware blobs to Resources/"; \
+	else \
+	    echo "  FW   no *.bin in firmware/ — skipping (add before loading)"; \
+	fi
+	@echo "  OK   build/out/rtw88.kext"
 
-# Compile Linux driver C files with compat flags
+# Compile Linux driver C files with compat headers
 $(BUILD_DIR)/driver/%.o: $(LINUX_SRC)/%.c | $(BUILD_DIR)/driver
-	@echo "  CC  $(notdir $<)"
+	@echo "  CC   $(notdir $<)"
 	$(CC) $(DRIVER_CFLAGS) -c $< -o $@
 
 # Compile compat C files
 $(BUILD_DIR)/compat/%.o: $(COMPAT_DIR)/%.c | $(BUILD_DIR)/compat
-	@echo "  CC  $(notdir $<)"
+	@echo "  CC   $(notdir $<)"
 	$(CC) $(DRIVER_CFLAGS) -c $< -o $@
 
 # Compile kmod_info.c (plain C, no compat headers)
 $(BUILD_DIR)/kext/kmod_info.o: $(KEXT_SRC)/kmod_info.c | $(BUILD_DIR)/kext
-	@echo "  CC  kmod_info.c"
+	@echo "  CC   kmod_info.c"
 	$(CC) $(KEXT_FLAGS) -c $< -o $@
 
-# Compile kext C++ files
+# Compile kext C++ wrapper files
 $(BUILD_DIR)/kext/%.o: $(KEXT_SRC)/%.cpp | $(BUILD_DIR)/kext
-	@echo "  CXX $(notdir $<)"
+	@echo "  CXX  $(notdir $<)"
 	$(CXX) $(KEXT_CXXFLAGS) -c $< -o $@
 
 # ctl binary
-ctl: $(BUILD_DIR)/rtw88ctl
+ctl: $(OUT_CTL)
 
-$(BUILD_DIR)/rtw88ctl: $(CTL_DIR)/main.c | $(BUILD_DIR)
-	@echo "  CC  rtw88ctl"
+$(OUT_CTL): $(CTL_DIR)/main.c | $(OUT_DIR)
+	@echo "  CC   rtw88ctl"
 	$(CC) $(ARCH) $(MINOS) \
 	    -isysroot $(SDK) \
 	    -framework IOKit \
 	    -framework CoreFoundation \
 	    -o $@ $<
-	@echo "  rtw88ctl built: $@"
+	@echo "  OK   build/out/rtw88ctl"
 
 # ------------------------------------------------------------------ #
 # Directory creation                                                  #
 # ------------------------------------------------------------------ #
-
-$(BUILD_DIR):
-	mkdir -p $@
 
 $(BUILD_DIR)/driver:
 	mkdir -p $@
@@ -245,7 +260,10 @@ $(BUILD_DIR)/compat:
 $(BUILD_DIR)/kext:
 	mkdir -p $@
 
-$(KEXT_BUNDLE)/Contents/MacOS:
+$(OUT_DIR):
+	mkdir -p $@
+
+$(OUT_KEXT)/Contents/MacOS:
 	mkdir -p $@
 
 # ------------------------------------------------------------------ #
@@ -254,16 +272,16 @@ $(KEXT_BUNDLE)/Contents/MacOS:
 
 install: kext ctl
 	@echo "Installing rtw88.kext to /Library/Extensions..."
-	sudo cp -R $(KEXT_BUNDLE) /Library/Extensions/
+	sudo cp -R $(OUT_KEXT) /Library/Extensions/
 	sudo chown -R root:wheel /Library/Extensions/rtw88.kext
 	sudo chmod -R 755 /Library/Extensions/rtw88.kext
 	@echo "Installing rtw88ctl to /usr/local/bin..."
-	sudo install -m 755 $(BUILD_DIR)/rtw88ctl /usr/local/bin/rtw88ctl
+	sudo install -m 755 $(OUT_CTL) /usr/local/bin/rtw88ctl
 	@echo "Done. Run 'make load' or reboot to activate."
 
 load:
 	@echo "Loading rtw88.kext (requires SIP kext loading enabled)..."
-	sudo kextutil -v /Library/Extensions/rtw88.kext
+	sudo kextutil -v $(OUT_KEXT)
 
 unload:
 	@echo "Unloading rtw88.kext..."
@@ -271,13 +289,12 @@ unload:
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(KEXT_BIN)
 
 # ------------------------------------------------------------------ #
 # OpenCore injection helper                                           #
 # ------------------------------------------------------------------ #
 # To use with OpenCore:
-#   1. Copy rtw88.kext to OC/Kexts/
+#   1. Copy build/out/rtw88.kext to OC/Kexts/
 #   2. Add to config.plist -> Kernel -> Add:
 #      Arch: Any
 #      BundlePath: rtw88.kext
