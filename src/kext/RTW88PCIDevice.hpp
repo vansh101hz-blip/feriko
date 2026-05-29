@@ -1,0 +1,133 @@
+/* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+ * RTW88PCIDevice.hpp — IOEthernetController subclass for PCIe rtw88 chips.
+ *
+ * Approach mirrors itlwm: present a transparent Ethernet interface to macOS
+ * while doing 802.11 management internally.  The 802.11 state machine lives
+ * in RTW88IEEE80211; this class handles IOKit life-cycle and the Ethernet
+ * framing visible to macOS network stack.
+ */
+#pragma once
+
+/* Pull in mbuf_t and related kernel types before any IOKit network headers */
+#include <sys/kernel_types.h>
+
+#include <IOKit/network/IOEthernetController.h>
+#include <IOKit/network/IOEthernetInterface.h>
+#include <IOKit/network/IOGatedOutputQueue.h>
+#include <IOKit/network/IOMbufMemoryCursor.h>
+#include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IODMACommand.h>
+#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOCommandGate.h>
+
+/* Forward declarations */
+class RTW88IEEE80211;
+class RTW88UserClient;
+
+/* RTW88PCIDevice --------------------------------------------------------- */
+class RTW88PCIDevice : public IOEthernetController {
+    OSDeclareDefaultStructors(RTW88PCIDevice)
+
+    friend class RTW88UserClient;
+    friend class RTW88IEEE80211;
+
+public:
+    /* IOService */
+    bool     init(OSDictionary *props) override;
+    bool     start(IOService *provider) override;
+    void     stop(IOService *provider) override;
+    void     free() override;
+    IOReturn powerStateWillChangeTo(IOPMPowerFlags flags, unsigned long state,
+                                     IOService *actor) override;
+
+    /* IONetworkController */
+    IOReturn enable(IONetworkInterface *iface) override;
+    IOReturn disable(IONetworkInterface *iface) override;
+    IOReturn setMaxPacketSize(UInt32 maxSize) override;
+    IOReturn getMaxPacketSize(UInt32 *maxSize) const override;
+    IOReturn selectMedium(const IONetworkMedium *medium) override;
+    bool     configureInterface(IONetworkInterface *iface) override;
+    UInt32   outputPacket(mbuf_t m, void *param) override;
+
+    /* IOEthernetController */
+    IOReturn getHardwareAddress(IOEthernetAddress *addr) override;
+    IOReturn setHardwareAddress(const IOEthernetAddress *addr) override;
+    IOReturn setMulticastMode(bool active) override;
+    IOReturn setMulticastList(IOEthernetAddress *addrs, UInt32 count) override;
+    IOReturn setPromiscuousMode(bool active) override;
+    IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters) const override;
+
+    /* IOUserClient creation */
+    IOReturn newUserClient(task_t owningTask, void *securityID,
+                           UInt32 type, IOUserClient **handler) override;
+
+    /* Called from interrupt handler */
+    void handleInterrupt(IOInterruptEventSource *src, int count);
+
+    /* Called from RTW88IEEE80211 to deliver RX frames to macOS */
+    void injectRxFrame(mbuf_t m);
+
+    /* DMA helpers — used by Linux compat dma_alloc_coherent */
+    void *allocCoherent(size_t size, IOPhysicalAddress *phys);
+    void  freeCoherent(size_t size, void *virt, IOPhysicalAddress phys);
+
+    /* PCI config space — used by Linux compat pci_read/write_config_* */
+    UInt8  pciReadByte(int offset);
+    UInt16 pciReadWord(int offset);
+    UInt32 pciReadDword(int offset);
+    void   pciWriteByte(int offset, UInt8 val);
+    void   pciWriteWord(int offset, UInt16 val);
+    void   pciWriteDword(int offset, UInt32 val);
+    int    pciFindCapability(int cap);
+
+    /* 802.11 state machine accessors */
+    RTW88IEEE80211 *get80211() { return _ieee80211; }
+
+    /* MMIO base — used by compat ioremap shim */
+    volatile void *mmioBase() const { return _mmioBase; }
+
+private:
+    bool     attachDevice();
+    bool     setupInterrupt();
+    bool     setupDMA();
+    void     teardown();
+
+    bool     setupMediumDict();
+    void     addMedium(OSDictionary *mediums, IOMediumType type, UInt64 speed);
+
+    static void interruptOccurred(OSObject *owner,
+                                   IOInterruptEventSource *src, int count);
+
+    IOPCIDevice            *_pciDev       = nullptr;
+    IOMemoryMap            *_mmioMap      = nullptr;
+    volatile void          *_mmioBase     = nullptr;
+    IOWorkLoop             *_workLoop     = nullptr;
+    IOCommandGate          *_cmdGate      = nullptr;
+    IOInterruptEventSource *_intrSrc      = nullptr;
+    IOEthernetInterface    *_iface        = nullptr;
+    IOGatedOutputQueue     *_txQueue      = nullptr;
+
+    RTW88IEEE80211         *_ieee80211    = nullptr;
+    RTW88UserClient        *_userClient   = nullptr;
+
+    IOEthernetAddress       _macAddr;
+    bool                    _enabled      = false;
+    bool                    _initialized  = false;
+
+    /* Linked-list of allocated DMA buffers for cleanup */
+    struct DMAEntry {
+        IOBufferMemoryDescriptor *desc;
+        void    *virt;
+        IOPhysicalAddress phys;
+        size_t   size;
+        DMAEntry *next;
+    };
+    DMAEntry *_dmaList = nullptr;
+    IOSimpleLock *_dmaLock = nullptr;
+
+    /* Back-pointer passed to compat layer */
+    struct pci_dev *_compatPciDev = nullptr;
+};

@@ -1,0 +1,356 @@
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+// rtw88ctl — userspace control binary for rtw88 macOS kext
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <getopt.h>
+#include <errno.h>
+#include <unistd.h>
+#include <mach/mach.h>
+#include <IOKit/IOKitLib.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+/* ------------------------------------------------------------------ */
+/*  Selector numbers — must match RTW88UserClient.hpp                  */
+/* ------------------------------------------------------------------ */
+enum {
+    kRTW88Scan        = 0,
+    kRTW88Connect     = 1,
+    kRTW88Disconnect  = 2,
+    kRTW88GetState    = 3,
+    kRTW88GetBSSList  = 4,
+    kRTW88GetRSSI     = 5,
+    kRTW88SetDebug    = 6,
+    kRTW88GetLog      = 7,
+};
+
+struct RTW88ConnectArgs {
+    char ssid[33];
+    char password[64];
+};
+
+struct RTW88StateResult {
+    uint32_t state;
+    uint8_t  bssid[6];
+    char     ssid[33];
+    int32_t  rssi;
+    uint32_t channel;
+};
+
+static const char *state_name(uint32_t s)
+{
+    switch (s) {
+    case 0: return "idle";
+    case 1: return "scanning";
+    case 2: return "authenticating";
+    case 3: return "associating";
+    case 4: return "handshaking";
+    case 5: return "connected";
+    case 6: return "disconnecting";
+    default: return "unknown";
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  IOKit connection helpers                                            */
+/* ------------------------------------------------------------------ */
+static io_connect_t open_kext(void)
+{
+    CFMutableDictionaryRef matching =
+        IOServiceMatching("RTW88PCIDevice");
+    if (!matching) {
+        /* Try USB variant */
+        matching = IOServiceMatching("RTW88USBDevice");
+        if (!matching) {
+            fprintf(stderr, "rtw88ctl: no matching IOKit service found\n");
+            return MACH_PORT_NULL;
+        }
+    }
+
+    io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault,
+                                                       matching);
+    if (!service) {
+        fprintf(stderr, "rtw88ctl: no rtw88 device found "
+                "(is rtw88.kext loaded?)\n");
+        return MACH_PORT_NULL;
+    }
+
+    io_connect_t conn = MACH_PORT_NULL;
+    kern_return_t kr = IOServiceOpen(service, mach_task_self(), 0, &conn);
+    IOObjectRelease(service);
+
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: IOServiceOpen failed: %s\n",
+                mach_error_string(kr));
+        return MACH_PORT_NULL;
+    }
+    return conn;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Commands                                                            */
+/* ------------------------------------------------------------------ */
+
+static int cmd_scan(io_connect_t conn, int wait_secs)
+{
+    kern_return_t kr = IOConnectCallScalarMethod(conn, kRTW88Scan,
+                                                  NULL, 0, NULL, NULL);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: scan failed: %s\n", mach_error_string(kr));
+        return 1;
+    }
+    printf("Scanning");
+    fflush(stdout);
+    for (int i = 0; i < wait_secs; i++) {
+        sleep(1);
+        putchar('.');
+        fflush(stdout);
+    }
+    putchar('\n');
+    return 0;
+}
+
+static int cmd_list(io_connect_t conn)
+{
+    uint8_t buf[16 * 1024] = {};
+    size_t  len = sizeof(buf);
+
+    kern_return_t kr = IOConnectCallStructMethod(conn, kRTW88GetBSSList,
+                                                  NULL, 0, buf, &len);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: get BSS list failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+
+    printf("%-33s %-18s %5s %7s %s\n",
+           "SSID", "BSSID", "RSSI", "Channel", "Security");
+    printf("%s\n",
+           "-----------------------------------------------------------------------");
+
+    const uint8_t *p   = buf;
+    const uint8_t *end = buf + len;
+    while (p + 1 <= end) {
+        uint8_t ssid_len = *p++;
+        if (p + ssid_len + 6 + 2 + 1 + 4 > end) break;
+
+        char ssid[33] = {};
+        memcpy(ssid, p, ssid_len);
+        p += ssid_len;
+
+        uint8_t bssid[6];
+        memcpy(bssid, p, 6); p += 6;
+
+        int16_t rssi = (int16_t)(((uint16_t)p[0] << 8) | p[1]); p += 2;
+        uint8_t ch   = *p++;
+        uint32_t cipher; memcpy(&cipher, p, 4); p += 4;
+
+        const char *sec = (cipher == 0x000FAC04) ? "WPA2" :
+                          (cipher == 0x000FAC02) ? "TKIP" :
+                          (cipher == 0) ? "Open" : "Unknown";
+
+        printf("%-33s %02x:%02x:%02x:%02x:%02x:%02x %4d dBm %4d  %s\n",
+               ssid,
+               bssid[0], bssid[1], bssid[2],
+               bssid[3], bssid[4], bssid[5],
+               rssi, ch, sec);
+    }
+    return 0;
+}
+
+static int cmd_connect(io_connect_t conn, const char *ssid, const char *pass)
+{
+    struct RTW88ConnectArgs args = {};
+    strlcpy(args.ssid, ssid, sizeof(args.ssid));
+    if (pass) strlcpy(args.password, pass, sizeof(args.password));
+
+    kern_return_t kr = IOConnectCallStructMethod(conn, kRTW88Connect,
+                                                  &args, sizeof(args),
+                                                  NULL, NULL);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: connect failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+    printf("Connecting to '%s'...\n", ssid);
+
+    /* Poll state until connected or 30s timeout */
+    for (int i = 0; i < 30; i++) {
+        sleep(1);
+        struct RTW88StateResult result = {};
+        size_t sz = sizeof(result);
+        kr = IOConnectCallStructMethod(conn, kRTW88GetState,
+                                       NULL, 0, &result, &sz);
+        if (kr == KERN_SUCCESS) {
+            printf("\r[%2ds] state: %-16s", i + 1, state_name(result.state));
+            fflush(stdout);
+            if (result.state == 5) { /* connected */
+                printf("\nConnected! RSSI: %d dBm\n", result.rssi);
+                return 0;
+            }
+            if (result.state == 0 && i > 3) {
+                printf("\nConnection failed\n");
+                return 1;
+            }
+        }
+    }
+    printf("\nConnection timed out\n");
+    return 1;
+}
+
+static int cmd_disconnect(io_connect_t conn)
+{
+    kern_return_t kr = IOConnectCallScalarMethod(conn, kRTW88Disconnect,
+                                                  NULL, 0, NULL, NULL);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: disconnect failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+    printf("Disconnected\n");
+    return 0;
+}
+
+static int cmd_status(io_connect_t conn)
+{
+    struct RTW88StateResult result = {};
+    size_t sz = sizeof(result);
+
+    kern_return_t kr = IOConnectCallStructMethod(conn, kRTW88GetState,
+                                                  NULL, 0, &result, &sz);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: get state failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+    printf("State:   %s\n", state_name(result.state));
+    if (result.state == 5) {
+        printf("SSID:    %s\n", result.ssid[0] ? result.ssid : "(unknown)");
+        printf("BSSID:   %02x:%02x:%02x:%02x:%02x:%02x\n",
+               result.bssid[0], result.bssid[1], result.bssid[2],
+               result.bssid[3], result.bssid[4], result.bssid[5]);
+        printf("RSSI:    %d dBm\n", result.rssi);
+        printf("Channel: %u\n", result.channel);
+    }
+    return 0;
+}
+
+static int cmd_log(io_connect_t conn)
+{
+    char buf[4096] = {};
+    size_t sz = sizeof(buf);
+    kern_return_t kr = IOConnectCallStructMethod(conn, kRTW88GetLog,
+                                                  NULL, 0, buf, &sz);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: get log failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+    fwrite(buf, 1, sz, stdout);
+    return 0;
+}
+
+static int cmd_debug(io_connect_t conn, int level)
+{
+    uint64_t in = (uint64_t)level;
+    kern_return_t kr = IOConnectCallScalarMethod(conn, kRTW88SetDebug,
+                                                  &in, 1, NULL, NULL);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: set debug failed: %s\n",
+                mach_error_string(kr));
+        return 1;
+    }
+    printf("Debug level set to %d\n", level);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Usage                                                               */
+/* ------------------------------------------------------------------ */
+
+static void usage(const char *argv0)
+{
+    fprintf(stderr,
+        "Usage: %s <command> [options]\n"
+        "\n"
+        "Commands:\n"
+        "  scan [-w <secs>]         Scan for WiFi networks (default wait: 5s)\n"
+        "  list                     Show scan results\n"
+        "  connect <ssid> [pass]    Connect to a network\n"
+        "  disconnect               Disconnect\n"
+        "  status                   Show current connection status\n"
+        "  log                      Dump driver log buffer\n"
+        "  debug <level>            Set debug level (0=err 1=warn 2=info 3=dbg)\n"
+        "\n"
+        "Examples:\n"
+        "  %s scan -w 10            Scan for 10 seconds\n"
+        "  %s list                  Show found networks\n"
+        "  %s connect \"MyWiFi\" \"password123\"\n"
+        "  %s status\n"
+        "\n"
+        "Notes:\n"
+        "  - rtw88.kext must be loaded (OpenCore injection or kextload)\n"
+        "  - Works in BaseSystem (Recovery) environment\n"
+        "  - Run with sudo if IOServiceOpen fails\n",
+        argv0, argv0, argv0, argv0, argv0);
+}
+
+/* ------------------------------------------------------------------ */
+/*  main                                                                */
+/* ------------------------------------------------------------------ */
+
+int main(int argc, char *argv[])
+{
+    if (argc < 2) {
+        usage(argv[0]);
+        return 1;
+    }
+
+    io_connect_t conn = open_kext();
+    if (conn == MACH_PORT_NULL) return 1;
+
+    int ret = 0;
+    const char *cmd = argv[1];
+
+    if (strcmp(cmd, "scan") == 0) {
+        int wait = 5;
+        int opt;
+        while ((opt = getopt(argc - 1, argv + 1, "w:")) != -1) {
+            if (opt == 'w') wait = atoi(optarg);
+        }
+        ret = cmd_scan(conn, wait);
+
+    } else if (strcmp(cmd, "list") == 0) {
+        ret = cmd_list(conn);
+
+    } else if (strcmp(cmd, "connect") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "rtw88ctl: connect requires SSID\n");
+            ret = 1;
+        } else {
+            ret = cmd_connect(conn, argv[2], argc >= 4 ? argv[3] : NULL);
+        }
+
+    } else if (strcmp(cmd, "disconnect") == 0) {
+        ret = cmd_disconnect(conn);
+
+    } else if (strcmp(cmd, "status") == 0) {
+        ret = cmd_status(conn);
+
+    } else if (strcmp(cmd, "log") == 0) {
+        ret = cmd_log(conn);
+
+    } else if (strcmp(cmd, "debug") == 0) {
+        if (argc < 3) { fprintf(stderr, "debug requires level\n"); ret = 1; }
+        else ret = cmd_debug(conn, atoi(argv[2]));
+
+    } else {
+        fprintf(stderr, "rtw88ctl: unknown command '%s'\n", cmd);
+        usage(argv[0]);
+        ret = 1;
+    }
+
+    IOServiceClose(conn);
+    return ret;
+}
