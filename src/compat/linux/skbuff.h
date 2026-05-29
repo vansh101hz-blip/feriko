@@ -268,4 +268,59 @@ static inline unsigned char *skb_mac_header(const struct sk_buff *skb)
 #define PACKET_MULTICAST 2
 #define PACKET_OTHERHOST 3
 
+/* dev_kfree_skb — simple alias (no DMA unmap needed) */
+static inline void dev_kfree_skb(struct sk_buff *skb) { kfree_skb(skb); }
+
+/* Lockless (internal) queue operations */
+static inline void __skb_queue_tail(struct sk_buff_head *list,
+                                     struct sk_buff *skb)
+{
+    list_add_tail(&skb->list, &list->list);
+    list->qlen++;
+}
+
+static inline void __skb_unlink(struct sk_buff *skb, struct sk_buff_head *list)
+{
+    list_del(&skb->list);
+    list->qlen--;
+}
+
+static inline void skb_queue_head(struct sk_buff_head *list,
+                                   struct sk_buff *skb)
+{
+    spin_lock_bh(&list->lock);
+    list_add(&skb->list, &list->list);
+    list->qlen++;
+    spin_unlock_bh(&list->lock);
+}
+
+static inline struct sk_buff *skb_peek(const struct sk_buff_head *list)
+{
+    if (list_empty(&list->list)) return NULL;
+    return container_of(list->list.next, struct sk_buff, list);
+}
+
+static inline void skb_reset_tail_pointer(struct sk_buff *skb)
+{
+    skb->tail = skb->data;
+}
+
+static inline void skb_copy_header(struct sk_buff *dst,
+                                    const struct sk_buff *src)
+{
+    memcpy(dst->cb, src->cb, sizeof(dst->cb));
+    dst->priority = src->priority;
+}
+
+/* queue_mapping: stored in priority field for simplicity */
+static inline u16 skb_get_queue_mapping(const struct sk_buff *skb)
+{
+    return (u16)skb->priority;
+}
+
+static inline void skb_set_queue_mapping(struct sk_buff *skb, u16 queue_mapping)
+{
+    skb->priority = queue_mapping;
+}
+
 #endif /* _RTW88_COMPAT_SKBUFF_H */

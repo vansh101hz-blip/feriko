@@ -102,4 +102,90 @@ static inline u32 rtw_set32_mask_helper(u32 val, u32 mask, u32 data)
     return (val & ~mask) | ((data << __ffs(mask)) & mask);
 }
 
+/* fls is declared extern in MacKernelSDK's <libkern/libkern.h>; use it as-is.
+ * fls64 is defined above; no re-definition here. */
+
+static inline unsigned int hweight8(unsigned int w)
+{
+    return (unsigned int)__builtin_popcount(w & 0xffu);
+}
+
+static inline void bitmap_zero(unsigned long *dst, unsigned int nbits)
+{
+    unsigned int words = (nbits + BITS_PER_LONG - 1) / BITS_PER_LONG;
+    for (unsigned int i = 0; i < words; i++) dst[i] = 0UL;
+}
+
+static inline unsigned long find_first_bit(const unsigned long *addr,
+                                            unsigned long size)
+{
+    unsigned long words = (size + BITS_PER_LONG - 1) / BITS_PER_LONG;
+    for (unsigned long i = 0; i < words; i++) {
+        if (addr[i]) {
+            unsigned long bit = i * BITS_PER_LONG + __ffs(addr[i]);
+            return bit < size ? bit : size;
+        }
+    }
+    return size;
+}
+
+static inline unsigned long find_first_zero_bit(const unsigned long *addr,
+                                                  unsigned long size)
+{
+    unsigned long words = (size + BITS_PER_LONG - 1) / BITS_PER_LONG;
+    for (unsigned long i = 0; i < words; i++) {
+        unsigned long v = ~addr[i];
+        if (v) {
+            unsigned long bit = i * BITS_PER_LONG + __ffs(v);
+            return bit < size ? bit : size;
+        }
+    }
+    return size;
+}
+
+static inline unsigned long find_next_bit(const unsigned long *addr,
+                                           unsigned long size,
+                                           unsigned long offset)
+{
+    if (offset >= size) return size;
+    unsigned long idx   = offset / BITS_PER_LONG;
+    unsigned long start = offset % BITS_PER_LONG;
+    unsigned long mask  = addr[idx] & (~0UL << start);
+    if (mask) {
+        unsigned long bit = idx * BITS_PER_LONG + __ffs(mask);
+        return bit < size ? bit : size;
+    }
+    unsigned long words = (size + BITS_PER_LONG - 1) / BITS_PER_LONG;
+    for (idx++; idx < words; idx++) {
+        if (addr[idx]) {
+            unsigned long bit = idx * BITS_PER_LONG + __ffs(addr[idx]);
+            return bit < size ? bit : size;
+        }
+    }
+    return size;
+}
+
+static inline unsigned long find_next_zero_bit(const unsigned long *addr,
+                                                unsigned long size,
+                                                unsigned long offset)
+{
+    if (offset >= size) return size;
+    unsigned long idx   = offset / BITS_PER_LONG;
+    unsigned long start = offset % BITS_PER_LONG;
+    unsigned long mask  = (~addr[idx]) & (~0UL << start);
+    if (mask) {
+        unsigned long bit = idx * BITS_PER_LONG + __ffs(mask);
+        return bit < size ? bit : size;
+    }
+    unsigned long words = (size + BITS_PER_LONG - 1) / BITS_PER_LONG;
+    for (idx++; idx < words; idx++) {
+        unsigned long v = ~addr[idx];
+        if (v) {
+            unsigned long bit = idx * BITS_PER_LONG + __ffs(v);
+            return bit < size ? bit : size;
+        }
+    }
+    return size;
+}
+
 #endif /* _RTW88_COMPAT_BITOPS_H */

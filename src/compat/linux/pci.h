@@ -296,4 +296,34 @@ static inline int pci_restore_state(struct pci_dev *dev) { return 0; }
 static inline int pci_prepare_to_sleep(struct pci_dev *dev) { return 0; }
 static inline int pci_back_from_sleep(struct pci_dev *dev) { return 0; }
 
+/* pci_iomap — map a PCI BAR (alias pci_ioremap_bar) */
+static inline void __iomem *pci_iomap(struct pci_dev *dev, int bar, unsigned long maxlen)
+{
+    (void)maxlen;
+    return pci_ioremap_bar(dev, bar);
+}
+
+/* pci_set_power_state — no-op; power management not implemented */
+static inline int pci_set_power_state(struct pci_dev *dev, int state)
+{
+    (void)dev; (void)state;
+    return 0;
+}
+
+/* pci_upstream_bridge — return parent bus's bridge device (stub: NULL) */
+static inline struct pci_dev *pci_upstream_bridge(struct pci_dev *dev)
+{
+    (void)dev;
+    return NULL;
+}
+
+/* pcie_capability_read_word — read a PCIe capability register word */
+static inline int pcie_capability_read_word(struct pci_dev *dev, int pos, u16 *val)
+{
+    return pci_read_config_word(dev, pos, val);
+}
+
+/* to_pci_dev — cast a struct device * to struct pci_dev * */
+#define to_pci_dev(d) container_of(d, struct pci_dev, dev)
+
 #endif /* _RTW88_COMPAT_PCI_H */

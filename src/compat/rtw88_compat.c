@@ -456,6 +456,186 @@ int ieee80211_channel_to_frequency(int chan, enum nl80211_band band)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Workqueue extras                                                    */
+/* ------------------------------------------------------------------ */
+
+struct workqueue_struct *create_singlethread_workqueue(const char *name)
+{
+    return alloc_ordered_workqueue(name, 0);
+}
+
+void ieee80211_queue_work(struct ieee80211_hw *hw, struct work_struct *work)
+{
+    if (hw && hw->priv) {
+        struct workqueue_struct *wq = system_wq;
+        queue_work(wq, work);
+    }
+}
+
+void ieee80211_queue_delayed_work(struct ieee80211_hw *hw,
+                                   struct delayed_work *dwork,
+                                   unsigned long delay)
+{
+    queue_delayed_work(system_wq, dwork, delay);
+}
+
+/* ------------------------------------------------------------------ */
+/*  mac80211 stubs                                                      */
+/* ------------------------------------------------------------------ */
+
+struct ieee80211_sta *ieee80211_find_sta(struct ieee80211_vif *vif,
+                                          const u8 *addr)
+{ (void)vif; (void)addr; return NULL; }
+
+struct ieee80211_sta *ieee80211_find_sta_by_ifaddr(struct ieee80211_hw *hw,
+                                                    const u8 *addr,
+                                                    const u8 *localaddr)
+{ (void)hw; (void)addr; (void)localaddr; return NULL; }
+
+struct sk_buff *ieee80211_proberesp_get(struct ieee80211_hw *hw,
+                                         struct ieee80211_vif *vif)
+{ (void)hw; (void)vif; return NULL; }
+
+void ieee80211_purge_tx_queue(struct ieee80211_hw *hw,
+                               struct sk_buff_head *skbs)
+{
+    struct sk_buff *skb;
+    while ((skb = skb_dequeue(skbs)) != NULL)
+        kfree_skb(skb);
+}
+
+void ieee80211_restart_hw(struct ieee80211_hw *hw) { (void)hw; }
+
+int ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, u16 tid,
+                                   u16 timeout)
+{ (void)sta; (void)tid; (void)timeout; return -EOPNOTSUPP; }
+
+void ieee80211_stop_tx_ba_cb_irqsafe(struct ieee80211_vif *vif,
+                                      const u8 *ra, u16 tid)
+{ (void)vif; (void)ra; (void)tid; }
+
+void ieee80211_tx_info_clear_status(struct ieee80211_tx_info *info)
+{
+    int i;
+    for (i = 0; i < IEEE80211_TX_MAX_RATES; i++) {
+        info->status.rates[i].idx   = -1;
+        info->status.rates[i].count = 0;
+        info->status.rates[i].flags = 0;
+    }
+}
+
+void ieee80211_txq_get_depth(struct ieee80211_txq *txq,
+                              unsigned long *frame_cnt,
+                              unsigned long *byte_cnt)
+{
+    if (frame_cnt) *frame_cnt = 0;
+    if (byte_cnt)  *byte_cnt  = 0;
+}
+
+u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
+{
+    return vif ? (u8)vif->type : 0;
+}
+
+struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
+{ (void)wiphy; return NULL; }
+
+int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
+                                     enum nl80211_band band)
+{ (void)ie; (void)ielen; (void)band; return -1; }
+
+bool cfg80211_ssid_eq(struct cfg80211_ssid *a, struct cfg80211_ssid *b)
+{
+    if (!a || !b) return false;
+    if (a->ssid_len != b->ssid_len) return false;
+    return memcmp(a->ssid, b->ssid, a->ssid_len) == 0;
+}
+
+int regulatory_hint(struct wiphy *wiphy, const char *alpha2)
+{ (void)wiphy; (void)alpha2; return 0; }
+
+/* sdio_align_size stub — not needed for PCIe-only build */
+void sdio_align_size(void) {}
+
+/* ------------------------------------------------------------------ */
+/*  Firmware / devm stubs                                               */
+/* ------------------------------------------------------------------ */
+
+int request_firmware_nowait(struct module *module, bool uevent,
+                             const char *name, struct device *device,
+                             gfp_t gfp, void *context,
+                             void (*cont)(const struct firmware *fw, void *ctx))
+{
+    (void)module; (void)uevent; (void)name; (void)device;
+    (void)gfp; (void)context;
+    if (cont) cont(NULL, context);
+    return 0;
+}
+
+void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp)
+{
+    (void)dev;
+    void *p = kmalloc(len, gfp);
+    if (p) memcpy(p, src, len);
+    return p;
+}
+
+void *devm_kmemdup_array(struct device *dev, size_t n, size_t size,
+                          gfp_t gfp)
+{
+    (void)dev;
+    return kzalloc(n * size, gfp);
+}
+
+void devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
+{ (void)dev; (void)irq; (void)dev_id; }
+
+/* ------------------------------------------------------------------ */
+/*  Network device stubs                                                */
+/* ------------------------------------------------------------------ */
+
+struct net_device *alloc_netdev_dummy(int sizeof_priv)
+{
+    return (struct net_device *)kzalloc(
+        sizeof(struct net_device) + sizeof_priv, GFP_KERNEL);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Misc kernel helpers                                                  */
+/* ------------------------------------------------------------------ */
+
+void *kmalloc_obj(size_t size, gfp_t flags, const char *name)
+{ (void)name; return kmalloc(size, flags); }
+
+void *kzalloc_obj(size_t size, gfp_t flags, const char *name)
+{ (void)name; return kzalloc(size, flags); }
+
+void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask)
+{
+    u8 rand[6];
+    read_random(rand, sizeof(rand));
+    for (int i = 0; i < 6; i++)
+        buf[i] = (addr[i] & ~mask[i]) | (rand[i] & mask[i]);
+}
+
+int atomic_dec_if_positive(atomic_t *v)
+{
+    int c, old;
+    c = atomic_read(v);
+    for (;;) {
+        if (c <= 0) return c - 1;
+        old = __sync_val_compare_and_swap(&v->counter, c, c - 1);
+        if (old == c) return c - 1;
+        c = old;
+    }
+}
+
+int timer_delete_sync(struct timer_list *timer)
+{
+    return del_timer_sync(timer);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Init / exit                                                         */
 /* ------------------------------------------------------------------ */
 

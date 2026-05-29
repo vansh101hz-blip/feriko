@@ -80,8 +80,6 @@ DRIVER_CFLAGS := \
     -DCONFIG_RTW88_8822BU=1 \
     -DCONFIG_RTW88_8822CU=1 \
     -DCONFIG_RTW88_8812AU=1 \
-    -DCONFIG_RTW88_DEBUG=1 \
-    -DCONFIG_RTW88_DEBUGFS=0 \
     -Wno-implicit-function-declaration \
     -Wno-int-conversion \
     -Wno-incompatible-pointer-types \
@@ -158,12 +156,12 @@ KMOD_SRCS := \
     $(KEXT_SRC)/kmod_info.c
 
 # IOKit C++ wrapper
+# RTW88USBDevice excluded: IOUSBHostFamily not in OSBundleLibraries
 KEXT_SRCS := \
     $(KEXT_SRC)/RTW88Kext.cpp \
     $(KEXT_SRC)/RTW88PCIDevice.cpp \
     $(KEXT_SRC)/RTW88IEEE80211.cpp \
-    $(KEXT_SRC)/RTW88UserClient.cpp \
-    $(KEXT_SRC)/RTW88USBDevice.cpp
+    $(KEXT_SRC)/RTW88UserClient.cpp
 
 # ------------------------------------------------------------------ #
 # Object files                                                         #

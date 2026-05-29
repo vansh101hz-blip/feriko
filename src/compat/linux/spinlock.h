@@ -33,13 +33,15 @@ static inline void spin_unlock(spinlock_t *sl)
 #define spin_lock_irq(sl)  spin_lock(sl)
 #define spin_unlock_irq(sl) spin_unlock(sl)
 
-typedef IOInterruptState rtw88_irq_flags_t;
+typedef unsigned long rtw88_irq_flags_t;
 
+/* We don't run at interrupt level, so skip the IRQ-disable variants
+ * (IOSimpleLockLockDisableInterrupt is not exported by newer macOS KPIs). */
 #define spin_lock_irqsave(sl, flags) \
-    do { (flags) = IOSimpleLockLockDisableInterrupt((sl)->lock); } while (0)
+    do { (void)(flags); IOSimpleLockLock((sl)->lock); } while (0)
 
 #define spin_unlock_irqrestore(sl, flags) \
-    do { IOSimpleLockUnlockEnableInterrupt((sl)->lock, (flags)); } while (0)
+    do { (void)(flags); IOSimpleLockUnlock((sl)->lock); } while (0)
 
 /*
  * rwlock_t — use IOLock for both read and write paths (simple mutex).

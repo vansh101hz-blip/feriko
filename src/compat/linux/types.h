@@ -107,6 +107,16 @@ typedef unsigned int   uint;
 #define le16_to_cpup(p) le16_to_cpu(*(p))
 #define le32_to_cpup(p) le32_to_cpu(*(p))
 
+/* Double-underscore variants used by some Linux driver code */
+#define __le16_to_cpu(x)  le16_to_cpu(x)
+#define __le32_to_cpu(x)  le32_to_cpu(x)
+#define __le64_to_cpu(x)  le64_to_cpu(x)
+#define __cpu_to_le16(x)  cpu_to_le16(x)
+#define __cpu_to_le32(x)  cpu_to_le32(x)
+#define __cpu_to_le64(x)  cpu_to_le64(x)
+#define __be16_to_cpu(x)  be16_to_cpu(x)
+#define __be32_to_cpu(x)  be32_to_cpu(x)
+
 #define BITS_PER_LONG      (sizeof(long) * 8)
 #define BITS_PER_LONG_LONG 64
 

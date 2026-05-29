@@ -142,4 +142,45 @@ extern struct task_struct *__rtw88_current_task;
 #define S8_MAX   ((s8)(U8_MAX >> 1))
 #define S8_MIN   ((s8)(-S8_MAX - 1))
 
+/* Integer math */
+#define min3(a, b, c)           min(min(a, b), c)
+#define max3(a, b, c)           max(max(a, b), c)
+#define abs_diff(a, b)          ((a) > (b) ? (a) - (b) : (b) - (a))
+
+#define DIV_ROUND_UP(n, d)      (((n) + (d) - 1) / (d))
+#define DIV_ROUND_DOWN(n, d)    ((n) / (d))
+#define DIV_ROUND_CLOSEST(n, d) (((n) + (d) / 2) / (d))
+#define round_up(x, y)          ((((x) + (y) - 1) / (y)) * (y))
+#define round_down(x, y)        (((x) / (y)) * (y))
+
+/* Delay / sleep helpers (kernel context) */
+static inline void fsleep(unsigned long us)
+{
+    if (us < 1000)
+        IODelay((unsigned int)us);
+    else
+        IOSleep((unsigned int)(us / 1000) + 1);
+}
+
+/* read_poll_timeout_atomic — poll op(args) until cond is true or timeout */
+#define read_poll_timeout_atomic(op, val, cond, delay_us, timeout_us, \
+                                  delay_before_read, args...) \
+({ \
+    u64 _deadline = mach_absolute_time() + (u64)(timeout_us) * 1000ULL; \
+    for (;;) { \
+        (val) = op(args); \
+        if (cond) { break; } \
+        if (mach_absolute_time() >= _deadline) { (val) = op(args); break; } \
+        IODelay((unsigned int)(delay_us) < 1 ? 1 : (unsigned int)(delay_us)); \
+    } \
+    (cond) ? 0 : -ETIMEDOUT; \
+})
+
+/* One-shot message macros */
+#define pr_err_once(fmt, ...) \
+    do { static int _once; if (!_once) { _once = 1; pr_err(fmt, ##__VA_ARGS__); } } while (0)
+
+#define dev_dbg_ratelimited(dev, fmt, ...) \
+    do { (void)(dev); } while (0)
+
 #endif /* _RTW88_COMPAT_KERNEL_H */
