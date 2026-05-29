@@ -145,6 +145,10 @@ CHIP_SRCS := \
 COMPAT_SRCS := \
     $(COMPAT_DIR)/rtw88_compat.c
 
+# kmod_info.c — defines _kmod_info symbol (required by kmutil/kextutil)
+KMOD_SRCS := \
+    $(KEXT_SRC)/kmod_info.c
+
 # IOKit C++ wrapper
 KEXT_SRCS := \
     $(KEXT_SRC)/RTW88Kext.cpp \
@@ -160,9 +164,10 @@ KEXT_SRCS := \
 DRIVER_OBJS := $(patsubst $(LINUX_SRC)/%.c, $(BUILD_DIR)/driver/%.o, $(DRIVER_SRCS))
 CHIP_OBJS   := $(patsubst $(LINUX_SRC)/%.c, $(BUILD_DIR)/driver/%.o, $(CHIP_SRCS))
 COMPAT_OBJS := $(patsubst $(COMPAT_DIR)/%.c, $(BUILD_DIR)/compat/%.o, $(COMPAT_SRCS))
+KMOD_OBJS   := $(patsubst $(KEXT_SRC)/%.c, $(BUILD_DIR)/kext/%.o, $(KMOD_SRCS))
 KEXT_OBJS   := $(patsubst $(KEXT_SRC)/%.cpp, $(BUILD_DIR)/kext/%.o, $(KEXT_SRCS))
 
-ALL_OBJS    := $(DRIVER_OBJS) $(CHIP_OBJS) $(COMPAT_OBJS) $(KEXT_OBJS)
+ALL_OBJS    := $(DRIVER_OBJS) $(CHIP_OBJS) $(COMPAT_OBJS) $(KMOD_OBJS) $(KEXT_OBJS)
 
 # ------------------------------------------------------------------ #
 # Linker flags                                                         #
@@ -201,6 +206,11 @@ $(BUILD_DIR)/driver/%.o: $(LINUX_SRC)/%.c | $(BUILD_DIR)/driver
 $(BUILD_DIR)/compat/%.o: $(COMPAT_DIR)/%.c | $(BUILD_DIR)/compat
 	@echo "  CC  $(notdir $<)"
 	$(CC) $(DRIVER_CFLAGS) -c $< -o $@
+
+# Compile kmod_info.c (plain C, no compat headers)
+$(BUILD_DIR)/kext/kmod_info.o: $(KEXT_SRC)/kmod_info.c | $(BUILD_DIR)/kext
+	@echo "  CC  kmod_info.c"
+	$(CC) $(KEXT_FLAGS) -c $< -o $@
 
 # Compile kext C++ files
 $(BUILD_DIR)/kext/%.o: $(KEXT_SRC)/%.cpp | $(BUILD_DIR)/kext

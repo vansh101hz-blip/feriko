@@ -28,7 +28,7 @@
     <string>????</string>
 
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2024 rtw88-macos. GPL-2.0 OR BSD-3-Clause</string>
+    <string>Copyright 2024 rtw88-macos. GPL-2.0 OR BSD-3-Clause</string>
 
     <key>OSBundleCompatibleVersion</key>
     <string>1.0.0</string>
@@ -39,30 +39,23 @@
         <string>1.0.0</string>
         <key>com.apple.iokit.IOPCIFamily</key>
         <string>2.9</string>
+        <key>com.apple.iokit.IOUSBHostFamily</key>
+        <string>1.0.0</string>
+        <key>com.apple.kpi.bsd</key>
+        <string>20.0.0</string>
         <key>com.apple.kpi.iokit</key>
-        <string>8.0.0</string>
+        <string>20.0.0</string>
         <key>com.apple.kpi.libkern</key>
-        <string>8.0.0</string>
+        <string>20.0.0</string>
         <key>com.apple.kpi.mach</key>
-        <string>8.0.0</string>
+        <string>20.0.0</string>
         <key>com.apple.kpi.unsupported</key>
-        <string>8.0.0</string>
+        <string>20.0.0</string>
     </dict>
 
-    <!--
-        IOKitPersonalities: one entry per supported PCIe chip variant.
-        OpenCore injects this kext before macOS loads, so all devices
-        listed here are matched at boot.
-
-        USB variants share vendor 0x0BDA; they get their own separate
-        RTW88USBDevice personality below the PCIe entries.
-    -->
     <key>IOKitPersonalities</key>
     <dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8822BE — 802.11ac 2x2 PCIe                           -->
-        <!-- ======================================================= -->
         <key>RTL8822BE</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -81,9 +74,6 @@
             <string>rtw8822b_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8822CE — 802.11ac 2x2 PCIe (most common hackintosh)  -->
-        <!-- ======================================================= -->
         <key>RTL8822CE</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -102,9 +92,6 @@
             <string>rtw8822c_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8821CE — 802.11ac 1x1 PCIe                           -->
-        <!-- ======================================================= -->
         <key>RTL8821CE</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -123,9 +110,6 @@
             <string>rtw8821c_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8812AE — 802.11ac 2x2 PCIe                           -->
-        <!-- ======================================================= -->
         <key>RTL8812AE</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -144,9 +128,6 @@
             <string>rtw8812a_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8814AE — 802.11ac 4x4 PCIe                           -->
-        <!-- ======================================================= -->
         <key>RTL8814AE</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -165,9 +146,6 @@
             <string>rtw8814a_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8821AU — 802.11ac 1x1 USB                            -->
-        <!-- ======================================================= -->
         <key>RTL8821AU</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -188,9 +166,6 @@
             <string>rtw8821a_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8822BU — 802.11ac 2x2 USB                            -->
-        <!-- ======================================================= -->
         <key>RTL8822BU</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -211,9 +186,6 @@
             <string>rtw8822b_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8822CU — 802.11ac 2x2 USB                            -->
-        <!-- ======================================================= -->
         <key>RTL8822CU</key>
         <dict>
             <key>CFBundleIdentifier</key>
@@ -234,9 +206,6 @@
             <string>rtw8822c_fw.bin</string>
         </dict>
 
-        <!-- ======================================================= -->
-        <!-- RTL8812AU — 802.11ac 2x2 USB (popular USB adapter)      -->
-        <!-- ======================================================= -->
         <key>RTL8812AU</key>
         <dict>
             <key>CFBundleIdentifier</key>
