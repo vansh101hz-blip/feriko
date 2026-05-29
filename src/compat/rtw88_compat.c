@@ -75,13 +75,6 @@ int thread_call_cancel_wait(thread_call_t call)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Firmware store                                                       */
-/* ------------------------------------------------------------------ */
-
-struct rtw88_fw_entry rtw88_fw_store[RTW88_MAX_FW_ENTRIES];
-int                   rtw88_fw_count = 0;
-
-/* ------------------------------------------------------------------ */
 /*  Global DMA / PCI / USB ops pointers                                 */
 /* ------------------------------------------------------------------ */
 
@@ -573,20 +566,7 @@ int regulatory_hint(struct wiphy *wiphy, const char *alpha2)
 /* sdio_align_size stub — not needed for PCIe-only build */
 void sdio_align_size(void) {}
 
-/* ------------------------------------------------------------------ */
-/*  Firmware / devm stubs                                               */
-/* ------------------------------------------------------------------ */
-
-int request_firmware_nowait(struct module *module, bool uevent,
-                             const char *name, struct device *device,
-                             gfp_t gfp, void *context,
-                             void (*cont)(const struct firmware *fw, void *ctx))
-{
-    (void)module; (void)uevent; (void)name; (void)device;
-    (void)gfp; (void)context;
-    if (cont) cont(NULL, context);
-    return 0;
-}
+/* firmware loading is in rtw88_firmware.c (separate TU, no compat header conflicts) */
 
 void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp)
 {

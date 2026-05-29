@@ -151,6 +151,14 @@ CHIP_SRCS := \
 COMPAT_SRCS := \
     $(COMPAT_DIR)/rtw88_compat.c
 
+# Firmware loader — compiled with system headers only (no Linux compat headers)
+# fw_blobs.c is auto-generated from firmware/*.bin before compilation
+FIRMWARE_SRCS := \
+    $(COMPAT_DIR)/rtw88_firmware.c \
+    $(COMPAT_DIR)/fw_blobs.c
+
+FW_BLOBS_C := $(COMPAT_DIR)/fw_blobs.c
+
 # kmod_info.c — defines _kmod_info (required by kmutil/kextutil)
 KMOD_SRCS := \
     $(KEXT_SRC)/kmod_info.c
@@ -167,13 +175,14 @@ KEXT_SRCS := \
 # Object files                                                         #
 # ------------------------------------------------------------------ #
 
-DRIVER_OBJS := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(DRIVER_SRCS))
-CHIP_OBJS   := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(CHIP_SRCS))
-COMPAT_OBJS := $(patsubst $(COMPAT_DIR)/%.c, $(BUILD_DIR)/compat/%.o, $(COMPAT_SRCS))
+DRIVER_OBJS   := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(DRIVER_SRCS))
+CHIP_OBJS     := $(patsubst $(LINUX_SRC)/%.c,  $(BUILD_DIR)/driver/%.o, $(CHIP_SRCS))
+COMPAT_OBJS   := $(patsubst $(COMPAT_DIR)/%.c, $(BUILD_DIR)/compat/%.o, $(COMPAT_SRCS))
+FIRMWARE_OBJS := $(patsubst $(COMPAT_DIR)/%.c, $(BUILD_DIR)/compat/%.o, $(FIRMWARE_SRCS))
 KMOD_OBJS   := $(patsubst $(KEXT_SRC)/%.c,   $(BUILD_DIR)/kext/%.o,   $(KMOD_SRCS))
 KEXT_OBJS   := $(patsubst $(KEXT_SRC)/%.cpp, $(BUILD_DIR)/kext/%.o,   $(KEXT_SRCS))
 
-ALL_OBJS    := $(DRIVER_OBJS) $(CHIP_OBJS) $(COMPAT_OBJS) $(KMOD_OBJS) $(KEXT_OBJS)
+ALL_OBJS    := $(DRIVER_OBJS) $(CHIP_OBJS) $(COMPAT_OBJS) $(FIRMWARE_OBJS) $(KMOD_OBJS) $(KEXT_OBJS)
 
 # ------------------------------------------------------------------ #
 # Linker flags                                                         #
@@ -204,16 +213,7 @@ $(OUT_KEXT_BIN): $(ALL_OBJS) | $(OUT_KEXT)/Contents/MacOS
 	$(LD) $(KEXT_LDFLAGS) -o $@ $(ALL_OBJS)
 	@echo "  SYNC $(OUT_KEXT)"
 	rsync -a --exclude='MacOS' $(KEXT_SKEL)/ $(OUT_KEXT)/
-	@if ls $(FIRMWARE_DIR)/*.bin 2>/dev/null | grep -q .; then \
-	    mkdir -p $(OUT_KEXT)/Contents/Resources; \
-	    cp $(FIRMWARE_DIR)/*.bin $(OUT_KEXT)/Contents/Resources/; \
-	    echo "  FW   copied firmware blobs to Resources/"; \
-	else \
-	    echo "  FW   no *.bin in firmware/ — skipping (add before loading)"; \
-	fi
-	@echo "  CHOWN root:wheel $(OUT_KEXT)"
-	@sudo chown -R root:wheel $(OUT_KEXT) && sudo chmod -R 755 $(OUT_KEXT) || \
-	    echo "  NOTE  run 'sudo chown -R root:wheel $(OUT_KEXT)' for kextutil"
+	@echo "  NOTE  run 'sudo chown -R root:wheel $(OUT_KEXT)' for kextutil"
 	@echo "  OK   build/out/rtw88.kext"
 
 # Compile Linux driver C files with compat headers
@@ -221,10 +221,30 @@ $(BUILD_DIR)/driver/%.o: $(LINUX_SRC)/%.c | $(BUILD_DIR)/driver
 	@echo "  CC   $(notdir $<)"
 	$(CC) $(DRIVER_CFLAGS) -c $< -o $@
 
-# Compile compat C files
+# Compile compat C files (with Linux compat headers)
 $(BUILD_DIR)/compat/%.o: $(COMPAT_DIR)/%.c | $(BUILD_DIR)/compat
 	@echo "  CC   $(notdir $<)"
 	$(CC) $(DRIVER_CFLAGS) -c $< -o $@
+
+# Generate fw_blobs.c from firmware/*.bin (zlib-compressed embedded blobs)
+$(FW_BLOBS_C): $(wildcard $(FIRMWARE_DIR)/*.bin) scripts/gen_fw_blobs.py
+	@echo "  GEN  fw_blobs.c"
+	python3 $(PROJ_ROOT)/scripts/gen_fw_blobs.py $(FIRMWARE_DIR) $@
+
+# Compile firmware loader + blobs (system headers only — no compat header conflicts)
+FW_CFLAGS := $(KEXT_FLAGS) \
+    -I$(MKSDK)/Headers \
+    -I$(SDK)/System/Library/Frameworks/Kernel.framework/Headers \
+    -I$(COMPAT_DIR) \
+    -Wno-unused-function
+
+$(BUILD_DIR)/compat/rtw88_firmware.o: $(COMPAT_DIR)/rtw88_firmware.c | $(BUILD_DIR)/compat
+	@echo "  CC   rtw88_firmware.c"
+	$(CC) $(FW_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/compat/fw_blobs.o: $(COMPAT_DIR)/fw_blobs.c | $(BUILD_DIR)/compat
+	@echo "  CC   fw_blobs.c"
+	$(CC) $(FW_CFLAGS) -c $< -o $@
 
 # Compile kmod_info.c (plain C, no compat headers)
 $(BUILD_DIR)/kext/kmod_info.o: $(KEXT_SRC)/kmod_info.c | $(BUILD_DIR)/kext

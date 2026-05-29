@@ -9,72 +9,27 @@
 struct firmware {
     size_t    size;
     const u8 *data;
-    void     *priv;   /* NULL when data is owned by the kext bundle */
 };
 
-struct device;  /* forward decl */
+struct module;
+struct device;
 
-/*
- * Firmware store — the kext C++ layer (RTW88PCIDevice::start) loads firmware
- * blobs from the kext bundle and registers them via rtw88_firmware_register().
- * The C driver calls request_firmware() which looks them up here.
- */
-#define RTW88_MAX_FW_ENTRIES 16
+/* Implemented in rtw88_compat.c — backed by VFS read from kext Resources/ */
+int  request_firmware_nowait(struct module *module, bool uevent,
+                              const char *name, struct device *device,
+                              gfp_t gfp, void *context,
+                              void (*cont)(const struct firmware *fw, void *ctx));
 
-struct rtw88_fw_entry {
-    const char *name;
-    const u8   *data;
-    size_t      size;
-};
+void release_firmware(const struct firmware *fw);
 
-extern struct rtw88_fw_entry rtw88_fw_store[RTW88_MAX_FW_ENTRIES];
-extern int                   rtw88_fw_count;
-
-/* Called by kext C++ before rtw_pci_probe() */
-static inline void rtw88_firmware_register(const char *name,
-                                             const u8   *data,
-                                             size_t      size)
-{
-    if (rtw88_fw_count < RTW88_MAX_FW_ENTRIES) {
-        rtw88_fw_store[rtw88_fw_count].name = name;
-        rtw88_fw_store[rtw88_fw_count].data = data;
-        rtw88_fw_store[rtw88_fw_count].size = size;
-        rtw88_fw_count++;
-    }
-}
-
-/* Strip leading path from a firmware name string */
-static inline const char *rtw88_fw_basename(const char *path)
-{
-    const char *base = path;
-    for (const char *p = path; *p; p++)
-        if (*p == '/') base = p + 1;
-    return base;
-}
+/* rtw88_load_firmware_sync: VFS-based synchronous read, defined in rtw88_compat.c */
+int rtw88_load_firmware_sync(const char *name, const struct firmware **fw_out);
 
 static inline int request_firmware(const struct firmware **fw_out,
-                                     const char *name, struct device *dev)
+                                    const char *name, struct device *dev)
 {
-    const char *base = rtw88_fw_basename(name);
-
-    for (int i = 0; i < rtw88_fw_count; i++) {
-        const char *ename = rtw88_fw_basename(rtw88_fw_store[i].name);
-        if (strcmp(base, ename) == 0) {
-            struct firmware *fw = (struct firmware *)kzalloc(sizeof(*fw), GFP_KERNEL);
-            if (!fw) return -ENOMEM;
-            fw->size = rtw88_fw_store[i].size;
-            fw->data = rtw88_fw_store[i].data;
-            fw->priv = NULL; /* data owned by kext bundle, not freed here */
-            *fw_out  = fw;
-            return 0;
-        }
-    }
-    return -ENOENT;
-}
-
-static inline void release_firmware(const struct firmware *fw)
-{
-    if (fw) kfree(fw); /* fw->data is bundle-owned, not freed */
+    (void)dev;
+    return rtw88_load_firmware_sync(name, fw_out);
 }
 
 static inline int firmware_request_nowarn(const struct firmware **fw,

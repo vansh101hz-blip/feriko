@@ -205,6 +205,9 @@ bool RTW88PCIDevice::start(IOService *provider)
         return false;
     }
 
+    /* Locate firmware Resources/ and set fw dir */
+    rtw88_find_fw_dir();
+
     /* Create 802.11 state machine */
     _ieee80211 = RTW88IEEE80211::create(this, _compatPciDev);
     if (!_ieee80211) {

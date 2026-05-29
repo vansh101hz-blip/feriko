@@ -26,7 +26,29 @@ void rtw_pci_remove(struct pci_dev *pdev);
 
 /* Exported from the compat layer for hooking */
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw);
+
+/* chip hw_spec structs — driver_data for rtw_pci_probe */
+extern const struct rtw_chip_info rtw8822b_hw_spec;
+extern const struct rtw_chip_info rtw8822c_hw_spec;
+extern const struct rtw_chip_info rtw8821c_hw_spec;
+extern const struct rtw_chip_info rtw8814a_hw_spec;
 } /* extern "C" */
+
+/* PCI device-ID → chip_info lookup (PCIe chips only) */
+struct rtw88_pci_id_entry {
+    uint16_t device;
+    const struct rtw_chip_info *chip;
+};
+
+static const struct rtw88_pci_id_entry rtw88_pci_chip_table[] = {
+    { 0xB822, &rtw8822b_hw_spec },  /* RTL8822BE */
+    { 0xC822, &rtw8822c_hw_spec },  /* RTL8822CE */
+    { 0xC82F, &rtw8822c_hw_spec },  /* RTL8822CE variant */
+    { 0xC821, &rtw8821c_hw_spec },  /* RTL8821CE */
+    { 0xB821, &rtw8821c_hw_spec },  /* RTL8821CE variant */
+    { 0x8813, &rtw8814a_hw_spec },  /* RTL8814AE */
+    { 0, nullptr }
+};
 
 /* Forward declaration of hw_callbacks struct from compat.c */
 struct rtw88_hw_callbacks {
@@ -137,13 +159,26 @@ IOReturn RTW88IEEE80211::start()
 {
     IOLog("rtw88: IEEE80211 start\n");
 
-    /* Probe the Linux PCI driver to set up rtw_dev */
-    /* rtw_pci_probe will call rtw_core_init internally */
+    /* Look up chip info from PCI device ID */
+    const struct rtw_chip_info *chip = nullptr;
+    for (int i = 0; rtw88_pci_chip_table[i].device != 0; i++) {
+        if (rtw88_pci_chip_table[i].device == _pcidev->device) {
+            chip = rtw88_pci_chip_table[i].chip;
+            break;
+        }
+    }
+    if (!chip) {
+        IOLog("rtw88: unknown PCI device %04x — cannot probe\n", _pcidev->device);
+        return kIOReturnUnsupported;
+    }
+    IOLog("rtw88: matched chip for device %04x\n", _pcidev->device);
+
     const struct pci_device_id fake_id = {
-        .vendor = _pcidev->vendor,
-        .device = _pcidev->device,
-        .subvendor = PCI_ANY_ID,
-        .subdevice = PCI_ANY_ID,
+        .vendor      = _pcidev->vendor,
+        .device      = _pcidev->device,
+        .subvendor   = PCI_ANY_ID,
+        .subdevice   = PCI_ANY_ID,
+        .driver_data = (unsigned long)chip,
     };
     int ret = rtw_pci_probe(_pcidev, &fake_id);
     if (ret != 0) {

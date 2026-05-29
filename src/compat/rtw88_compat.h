@@ -142,4 +142,9 @@ typedef atomic_t refcount_t;
 int  rtw88_compat_init(void);
 void rtw88_compat_exit(void);
 
+/* Set the firmware resources directory (call before rtw_pci_probe) */
+void rtw88_set_fw_dir(const char *dir);
+/* Auto-detect firmware directory from boot-args or well-known paths */
+void rtw88_find_fw_dir(void);
+
 #endif /* _RTW88_COMPAT_H */
