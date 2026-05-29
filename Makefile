@@ -211,6 +211,9 @@ $(OUT_KEXT_BIN): $(ALL_OBJS) | $(OUT_KEXT)/Contents/MacOS
 	else \
 	    echo "  FW   no *.bin in firmware/ — skipping (add before loading)"; \
 	fi
+	@echo "  CHOWN root:wheel $(OUT_KEXT)"
+	@sudo chown -R root:wheel $(OUT_KEXT) && sudo chmod -R 755 $(OUT_KEXT) || \
+	    echo "  NOTE  run 'sudo chown -R root:wheel $(OUT_KEXT)' for kextutil"
 	@echo "  OK   build/out/rtw88.kext"
 
 # Compile Linux driver C files with compat headers

@@ -70,7 +70,8 @@ extern thread_call_t thread_call_allocate(thread_call_func_t func,
 extern void          thread_call_free(thread_call_t call);
 extern int           thread_call_enter_delayed(thread_call_t call, uint64_t deadline);
 extern int           thread_call_cancel(thread_call_t call);
-extern int           thread_call_cancel_wait(thread_call_t call);
+/* thread_call_cancel_wait not exported by macOS 15+ KPIs; defined in rtw88_compat.c */
+int thread_call_cancel_wait(thread_call_t call);
 
 #else /* KERNEL defined — use real XNU types from MacKernelSDK */
 

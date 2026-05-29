@@ -59,6 +59,22 @@ void rtw88_hex_dump(const char *prefix, const void *buf, size_t len)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Symbols not exported by macOS 15+ KPIs — provided internally       */
+/* ------------------------------------------------------------------ */
+
+/* fls: declared extern in MacKernelSDK libkern.h but not KPI-exported */
+int fls(unsigned int x)
+{
+    return x ? (32 - __builtin_clz(x)) : 0;
+}
+
+/* thread_call_cancel_wait: not exported; cancel without waiting is safe here */
+int thread_call_cancel_wait(thread_call_t call)
+{
+    return thread_call_cancel(call);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Firmware store                                                       */
 /* ------------------------------------------------------------------ */
 
