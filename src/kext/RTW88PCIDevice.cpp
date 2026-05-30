@@ -127,6 +127,11 @@ static dma_addr_t compat_dma_map(struct device *dev, void *ptr,
     addr64_t pa = md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
     md->complete();
     md->release();
+    if (pa > 0xFFFFFFFFULL) {
+        IOLog("rtw88: dma_map: phys addr %llx exceeds 32-bit range!\n",
+              (unsigned long long)pa);
+        return 0;  /* dma_mapping_error() will catch this */
+    }
     return (dma_addr_t)pa;
 }
 static void compat_dma_unmap(struct device *dev, dma_addr_t addr,
@@ -482,11 +487,17 @@ void RTW88PCIDevice::injectRxFrame(mbuf_t m)
 
 void *RTW88PCIDevice::allocCoherent(size_t size, IOPhysicalAddress *phys)
 {
+    /*
+     * rtw88 TX ring descriptors store DMA addresses in 32-bit fields.
+     * Restrict physical allocation to the first 4GB so truncation to
+     * cpu_to_le32() in the ring descriptor is lossless.
+     * 0x00000000FFFFFFF0 = below 4GB, 16-byte aligned.
+     */
     IOBufferMemoryDescriptor *desc = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         kIOMemoryPhysicallyContiguous | kIODirectionInOut | kIOMemoryKernelUserShared,
         size,
-        0xFFFFFFFFFFFFF000ULL); /* 4K-aligned, 32-bit accessible by default */
+        0x00000000FFFFFFF0ULL);
 
     if (!desc) { IOLog("rtw88: dma alloc failed, size=%zu\n", size); return nullptr; }
     desc->prepare();
