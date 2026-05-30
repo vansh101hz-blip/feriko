@@ -160,14 +160,14 @@ bool RTW88PCIDevice::start(IOService *provider)
     _pciDev->setBusMasterEnable(true);
     _pciDev->setMemoryEnable(true);
 
-    /* Map BAR0 (MMIO) */
-    _mmioMap = _pciDev->mapDeviceMemoryWithIndex(0);
+    /* Map BAR2 — rtw88 driver hardcodes bar_id=2 in pci.c */
+    _mmioMap = _pciDev->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
     if (!_mmioMap) {
-        IOLog("rtw88: failed to map BAR0\n");
+        IOLog("rtw88: failed to map BAR2\n");
         return false;
     }
     _mmioBase = (volatile void *)_mmioMap->getVirtualAddress();
-    IOLog("rtw88: BAR0 mapped at %p, size 0x%llx\n",
+    IOLog("rtw88: BAR2 mapped at %p, size 0x%llx\n",
           (void *)_mmioBase, (unsigned long long)_mmioMap->getLength());
 
     /* Install global compat ops */
@@ -185,8 +185,8 @@ bool RTW88PCIDevice::start(IOService *provider)
     _compatPciDev->vendor  = _pciDev->configRead16(0x00);
     _compatPciDev->device  = _pciDev->configRead16(0x02);
     _compatPciDev->kext_dev = this;
-    _compatPciDev->resource[0]     = (resource_size_t)_mmioBase;
-    _compatPciDev->resource_len[0] = (resource_size_t)_mmioMap->getLength();
+    _compatPciDev->resource[2]     = (resource_size_t)_mmioBase;
+    _compatPciDev->resource_len[2] = (resource_size_t)_mmioMap->getLength();
 
     IOLog("rtw88: PCI device %04x:%04x\n",
           _compatPciDev->vendor, _compatPciDev->device);
