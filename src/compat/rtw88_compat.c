@@ -549,7 +549,7 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
 }
 
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
-{ (void)wiphy; return NULL; }
+{ return wiphy ? wiphy->_hw : NULL; }
 
 int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
                                      enum nl80211_band band)
