@@ -73,6 +73,7 @@ public:
     /* DMA helpers — used by Linux compat dma_alloc_coherent */
     void *allocCoherent(size_t size, IOPhysicalAddress *phys);
     void  freeCoherent(size_t size, void *virt, IOPhysicalAddress phys);
+    void  freeCoherentByPhys(IOPhysicalAddress phys);
 
     /* PCI config space — used by Linux compat pci_read/write_config_* */
     UInt8  pciReadByte(int offset);

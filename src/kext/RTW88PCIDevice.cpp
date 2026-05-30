@@ -115,27 +115,28 @@ static dma_addr_t compat_dma_map(struct device *dev, void *ptr,
                                    size_t size, int dir)
 {
     /*
-     * Translate kernel virtual address → physical address so the PCI
-     * device gets a real bus address in DMA descriptors.
-     * IOMalloc memory is wired, so prepare/complete is safe to call
-     * immediately — the physical mapping outlives the descriptor object.
+     * Kernel memory (IOMalloc) may be above 4GB on machines with >4GB RAM,
+     * but the rtw88 TX ring descriptors only store 32-bit DMA addresses.
+     * Allocate a bounce buffer from the first 4GB, copy the data in,
+     * and give the hardware the physical address of the bounce buffer.
+     * compat_dma_unmap frees the bounce buffer via freeCoherent.
      */
-    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(
-        (mach_vm_address_t)ptr, size, kIODirectionOutIn, kernel_task);
-    if (!md) return 0;
-    if (md->prepare() != kIOReturnSuccess) { md->release(); return 0; }
-    addr64_t pa = md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-    md->complete();
-    md->release();
-    if (pa > 0xFFFFFFFFULL) {
-        IOLog("rtw88: dma_map: phys addr %llx exceeds 32-bit range!\n",
-              (unsigned long long)pa);
-        return 0;  /* dma_mapping_error() will catch this */
-    }
-    return (dma_addr_t)pa;
+    if (!g_pci_dev_instance) return 0;
+    IOPhysicalAddress phys = 0;
+    void *bounce = g_pci_dev_instance->allocCoherent(size, &phys);
+    if (!bounce) return 0;
+    /* Copy source data into bounce buffer for TO_DEVICE transfers */
+    if (dir == 1 /* DMA_TO_DEVICE */ || dir == 0 /* DMA_BIDIRECTIONAL */)
+        memcpy(bounce, ptr, size);
+    return (dma_addr_t)phys;
 }
 static void compat_dma_unmap(struct device *dev, dma_addr_t addr,
-                               size_t size, int dir) {}
+                               size_t size, int dir)
+{
+    /* Free the bounce buffer allocated in compat_dma_map, looked up by phys */
+    if (g_pci_dev_instance)
+        g_pci_dev_instance->freeCoherentByPhys((IOPhysicalAddress)addr);
+}
 static void compat_dma_sync_cpu(struct device *dev, dma_addr_t addr,
                                   size_t size, int dir) {}
 static void compat_dma_sync_dev(struct device *dev, dma_addr_t addr,
@@ -541,6 +542,24 @@ void RTW88PCIDevice::freeCoherent(size_t size, void *virt, IOPhysicalAddress phy
     }
     IOSimpleLockUnlock(_dmaLock);
     IOLog("rtw88: freeCoherent: virt %p not found\n", virt);
+}
+
+void RTW88PCIDevice::freeCoherentByPhys(IOPhysicalAddress phys)
+{
+    IOSimpleLockLock(_dmaLock);
+    DMAEntry **prev = &_dmaList;
+    for (DMAEntry *e = _dmaList; e; e = e->next) {
+        if (e->phys == phys) {
+            *prev = e->next;
+            IOSimpleLockUnlock(_dmaLock);
+            e->desc->complete();
+            e->desc->release();
+            IOFree(e, sizeof(*e));
+            return;
+        }
+        prev = &e->next;
+    }
+    IOSimpleLockUnlock(_dmaLock);
 }
 
 /* ------------------------------------------------------------------ */
