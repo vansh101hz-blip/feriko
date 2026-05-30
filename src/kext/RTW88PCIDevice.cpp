@@ -7,6 +7,7 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMessage.h>
+#include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/network/IONetworkMedium.h>
 
 /* The Linux-compat pci_ops that route through this class */
@@ -113,8 +114,20 @@ static void compat_dma_free(struct device *dev, size_t size,
 static dma_addr_t compat_dma_map(struct device *dev, void *ptr,
                                    size_t size, int dir)
 {
-    /* For non-coherent mapping, return physical address of already-mapped buf */
-    return (dma_addr_t)(uintptr_t)ptr;
+    /*
+     * Translate kernel virtual address → physical address so the PCI
+     * device gets a real bus address in DMA descriptors.
+     * IOMalloc memory is wired, so prepare/complete is safe to call
+     * immediately — the physical mapping outlives the descriptor object.
+     */
+    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(
+        (mach_vm_address_t)ptr, size, kIODirectionOutIn, kernel_task);
+    if (!md) return 0;
+    if (md->prepare() != kIOReturnSuccess) { md->release(); return 0; }
+    addr64_t pa = md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
+    md->complete();
+    md->release();
+    return (dma_addr_t)pa;
 }
 static void compat_dma_unmap(struct device *dev, dma_addr_t addr,
                                size_t size, int dir) {}
