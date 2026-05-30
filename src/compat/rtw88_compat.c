@@ -552,10 +552,16 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
  * Simpler and more reliable than a struct back-pointer for a single-device driver. */
 static struct ieee80211_hw *g_rtw88_hw = NULL;
 
-void rtw88_register_hw(struct ieee80211_hw *hw) { g_rtw88_hw = hw; }
+void rtw88_register_hw(struct ieee80211_hw *hw)
+{
+    IOLog("rtw88: rtw88_register_hw called: hw=%p priv=%p\n",
+          (void *)hw, hw ? hw->priv : NULL);
+    g_rtw88_hw = hw;
+}
 
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 {
+    IOLog("rtw88: wiphy_to_ieee80211_hw: g_rtw88_hw=%p\n", (void *)g_rtw88_hw);
     (void)wiphy;
     return g_rtw88_hw;
 }
