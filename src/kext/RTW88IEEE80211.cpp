@@ -5,9 +5,17 @@
 #include "RTW88PCIDevice.hpp"
 
 #include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
 #include <sys/mbuf.h>
 #include <string.h>
 #include <sys/random.h>
+
+/* Debug stage checkpoint — logs message and pauses so verbose output
+ * is readable before the next stage runs or a panic occurs. */
+#define RTW88_STAGE(fmt, ...) do { \
+    IOLog("rtw88: ---- STAGE: " fmt " ----\n", ##__VA_ARGS__); \
+    IOSleep(1500); \
+} while (0)
 
 extern "C" {
 #include "../compat/rtw88_compat.h"
@@ -157,7 +165,7 @@ void RTW88IEEE80211::free()
 
 IOReturn RTW88IEEE80211::start()
 {
-    IOLog("rtw88: IEEE80211 start\n");
+    RTW88_STAGE("IEEE80211::start entered");
 
     /* Look up chip info from PCI device ID */
     const struct rtw_chip_info *chip = nullptr;
@@ -171,7 +179,7 @@ IOReturn RTW88IEEE80211::start()
         IOLog("rtw88: unknown PCI device %04x — cannot probe\n", _pcidev->device);
         return kIOReturnUnsupported;
     }
-    IOLog("rtw88: matched chip for device %04x\n", _pcidev->device);
+    RTW88_STAGE("chip matched: device=%04x", _pcidev->device);
 
     const struct pci_device_id fake_id = {
         .vendor      = _pcidev->vendor,
@@ -180,7 +188,10 @@ IOReturn RTW88IEEE80211::start()
         .subdevice   = PCI_ANY_ID,
         .driver_data = (unsigned long)chip,
     };
+
+    RTW88_STAGE("calling rtw_pci_probe");
     int ret = rtw_pci_probe(_pcidev, &fake_id);
+    RTW88_STAGE("rtw_pci_probe returned %d", ret);
     if (ret != 0) {
         IOLog("rtw88: rtw_pci_probe failed: %d\n", ret);
         return kIOReturnError;
@@ -189,6 +200,8 @@ IOReturn RTW88IEEE80211::start()
     /* rtw_pci_probe stores rtwdev in pdev->driver_data */
     _rtwdev = (struct rtw_dev *)_pcidev->driver_data;
     _hw     = _rtwdev ? *(struct ieee80211_hw **)_rtwdev : nullptr;
+
+    RTW88_STAGE("rtwdev=%p hw=%p", (void *)_rtwdev, (void *)_hw);
 
     /* Read MAC address from driver */
     if (_rtwdev) {
@@ -204,7 +217,7 @@ IOReturn RTW88IEEE80211::start()
     /* Create virtual interface in the driver */
     if (_hw && _hw->priv) {
         _rtwdev = (struct rtw_dev *)_hw->priv;
-        /* Add a STA virtual interface */
+        RTW88_STAGE("adding STA interface");
         _vif = (struct ieee80211_vif *)IOMallocZero(
             sizeof(struct ieee80211_vif) + 128);
         if (_vif) {
@@ -213,10 +226,11 @@ IOReturn RTW88IEEE80211::start()
             if (_hw->ops && _hw->ops->add_interface)
                 _hw->ops->add_interface(_hw, _vif);
         }
+        RTW88_STAGE("add_interface done");
     }
 
     _state = RTW88_STATE_IDLE;
-    IOLog("rtw88: IEEE80211 started\n");
+    RTW88_STAGE("IEEE80211::start complete — SUCCESS");
     return kIOReturnSuccess;
 }
 

@@ -9,6 +9,7 @@
 struct firmware {
     size_t    size;
     const u8 *data;
+    size_t    _alloc_size;  /* private — do not use in driver code */
 };
 
 struct module;
