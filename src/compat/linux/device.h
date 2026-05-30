@@ -37,6 +37,11 @@ static inline void *devm_kzalloc(struct device *dev, size_t size, gfp_t flags)
     return kzalloc(size, flags);
 }
 
+/* devm_kmemdup / devm_kmemdup_array — managed copies, implemented in rtw88_compat.c */
+void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp);
+void *devm_kmemdup_array(struct device *dev, const void *src, size_t n,
+                          size_t size, gfp_t gfp);
+
 /* dev_get_drvdata / dev_set_drvdata */
 static inline void *dev_get_drvdata(const struct device *dev) { return dev ? dev->kext_dev : NULL; }
 static inline void  dev_set_drvdata(struct device *dev, void *data) { if (dev) dev->kext_dev = data; }

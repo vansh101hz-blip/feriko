@@ -578,11 +578,13 @@ void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp)
     return p;
 }
 
-void *devm_kmemdup_array(struct device *dev, size_t n, size_t size,
-                          gfp_t gfp)
+void *devm_kmemdup_array(struct device *dev, const void *src, size_t n,
+                          size_t size, gfp_t gfp)
 {
     (void)dev;
-    return kzalloc(n * size, gfp);
+    void *p = kmalloc(n * size, gfp);
+    if (p && src) memcpy(p, src, n * size);
+    return p;
 }
 
 void devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
