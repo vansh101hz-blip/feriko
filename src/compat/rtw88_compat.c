@@ -549,7 +549,13 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
 }
 
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
-{ return wiphy ? wiphy->_hw : NULL; }
+{
+    struct ieee80211_hw *hw = wiphy ? wiphy->_hw : NULL;
+    IOLog("rtw88: wiphy_to_ieee80211_hw: wiphy=%p _hw=%p priv=%p\n",
+          (void *)wiphy, (void *)hw, hw ? hw->priv : NULL);
+    IOSleep(500);
+    return hw;
+}
 
 int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
                                      enum nl80211_band band)
