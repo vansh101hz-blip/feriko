@@ -42,6 +42,8 @@ void rtw88_dev_printk(int level, struct device *dev, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     IOLog("[rtw88 %s %s] %s", ls, name, buf);
+    /* Pause on errors so the message is readable before any subsequent crash */
+    if (level == KERN_ERR) IOSleep(2000);
 }
 
 void rtw88_hex_dump(const char *prefix, const void *buf, size_t len)

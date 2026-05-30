@@ -45,6 +45,12 @@ static inline void *kmalloc_array(size_t n, size_t size, gfp_t flags)
 static inline void kfree(const void *ptr)
 {
     if (!ptr) return;
+    /* Kernel pointers on x86-64 macOS have the high bit set.
+     * A low address means something corrupted this pointer — log and skip. */
+    if ((uintptr_t)ptr < 0xffff000000000000ULL) {
+        IOLog("rtw88: kfree: bad pointer %p — skipping (corruption?)\n", ptr);
+        return;
+    }
     size_t *block = (size_t *)ptr - 1;
     IOFree(block, *block + sizeof(size_t));
 }
