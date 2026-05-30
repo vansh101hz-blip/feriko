@@ -548,13 +548,16 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
     return vif ? (u8)vif->type : 0;
 }
 
+/* Single global hw pointer — set by ieee80211_alloc_hw, used by wiphy_to_ieee80211_hw.
+ * Simpler and more reliable than a struct back-pointer for a single-device driver. */
+static struct ieee80211_hw *g_rtw88_hw = NULL;
+
+void rtw88_register_hw(struct ieee80211_hw *hw) { g_rtw88_hw = hw; }
+
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 {
-    struct ieee80211_hw *hw = wiphy ? wiphy->_hw : NULL;
-    IOLog("rtw88: wiphy_to_ieee80211_hw: wiphy=%p _hw=%p priv=%p\n",
-          (void *)wiphy, (void *)hw, hw ? hw->priv : NULL);
-    IOSleep(500);
-    return hw;
+    (void)wiphy;
+    return g_rtw88_hw;
 }
 
 int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,

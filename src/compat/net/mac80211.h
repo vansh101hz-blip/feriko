@@ -964,6 +964,9 @@ struct ieee80211_ampdu_params {
 /*  ieee80211_hw alloc / free                                           */
 /* ------------------------------------------------------------------ */
 
+/* Implemented in rtw88_compat.c — stores hw in a global for wiphy_to_ieee80211_hw */
+void rtw88_register_hw(struct ieee80211_hw *hw);
+
 static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
                                                        const struct ieee80211_ops *ops)
 {
@@ -973,7 +976,8 @@ static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
     hw->priv = (u8 *)hw + sizeof(*hw);
     hw->wiphy = (struct wiphy *)kzalloc(sizeof(struct wiphy), GFP_KERNEL);
     if (!hw->wiphy) { kfree(hw); return NULL; }
-    hw->wiphy->_hw = hw;  /* back-pointer for wiphy_to_ieee80211_hw */
+    hw->wiphy->_hw = hw;       /* back-pointer (belt) */
+    rtw88_register_hw(hw);     /* global fallback (suspenders) */
     return hw;
 }
 
