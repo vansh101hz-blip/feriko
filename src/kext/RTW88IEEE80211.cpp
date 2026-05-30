@@ -203,12 +203,10 @@ IOReturn RTW88IEEE80211::start()
 
     RTW88_STAGE("rtwdev=%p hw=%p", (void *)_rtwdev, (void *)_hw);
 
-    /* Read MAC address from driver */
-    if (_rtwdev) {
-        /* The efuse MAC address is in rtwdev->efuse.addr */
-        /* Offset varies by driver struct layout; use compat accessor */
-        uint8_t *addr = (uint8_t *)_rtwdev + sizeof(void *) * 8; /* approximate */
-        memcpy(_macAddr, addr, 6);
+    /* Read MAC address — rtw_register_hw copies it to wiphy->perm_addr
+     * via SET_IEEE80211_PERM_ADDR, so read from there after probe. */
+    if (_hw && _hw->wiphy) {
+        memcpy(_macAddr, _hw->wiphy->perm_addr, 6);
         IOLog("rtw88: MAC address: %02x:%02x:%02x:%02x:%02x:%02x\n",
               _macAddr[0], _macAddr[1], _macAddr[2],
               _macAddr[3], _macAddr[4], _macAddr[5]);
