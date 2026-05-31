@@ -36,6 +36,12 @@ struct RTW88StateResult {
     char     ssid[33];
     int32_t  rssi;
     uint32_t channel;
+    uint8_t  mac_addr[6];
+    uint16_t fw_version;
+    uint8_t  fw_sub_version;
+    char     chip_name[32];
+    uint32_t rx_byte_count;
+    uint32_t tx_byte_count;
 };
 
 /* ------------------------------------------------------------------ */

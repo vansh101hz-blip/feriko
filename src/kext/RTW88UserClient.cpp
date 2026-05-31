@@ -170,22 +170,20 @@ IOReturn RTW88UserClient::sDisconnect(RTW88UserClient *uc, void *ref,
 IOReturn RTW88UserClient::sGetState(RTW88UserClient *uc, void *ref,
                                       IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
     if (!args->structureOutput || args->structureOutputSize < sizeof(RTW88StateResult))
         return kIOReturnBadArgument;
 
     RTW88StateResult *result = (RTW88StateResult *)args->structureOutput;
     memset(result, 0, sizeof(*result));
 
-    RTW88State state;
-    IOReturn ret = uc->_provider->get80211()->cmdGetState(&state);
+    if (!uc->_provider || !uc->_provider->get80211()) {
+        strlcpy(result->chip_name, "Uninitialized", sizeof(result->chip_name));
+        args->structureOutputSize = sizeof(*result);
+        return kIOReturnSuccess;
+    }
+
+    IOReturn ret = uc->_provider->get80211()->cmdGetState(result);
     if (ret != kIOReturnSuccess) return ret;
-
-    result->state = (uint32_t)state;
-
-    int rssi = -100;
-    uc->_provider->get80211()->cmdGetRSSI(&rssi);
-    result->rssi = rssi;
 
     args->structureOutputSize = sizeof(*result);
     return kIOReturnSuccess;

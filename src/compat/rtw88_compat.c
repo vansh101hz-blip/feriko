@@ -674,3 +674,48 @@ void rtw88_compat_exit(void)
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Driver Info Helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+#include "main.h"
+
+void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version)
+{
+    if (version) *version = 0;
+    if (sub_version) *sub_version = 0;
+    if (!rtwdev) return;
+    if (version) *version = rtwdev->fw.version;
+    if (sub_version) *sub_version = rtwdev->fw.sub_version;
+}
+
+void rtw88_get_chip_name(struct rtw_dev *rtwdev, char *name_buf, size_t buf_sz)
+{
+    if (!name_buf || buf_sz == 0) return;
+    name_buf[0] = '\0';
+    if (!rtwdev || !rtwdev->chip) {
+        strlcpy(name_buf, "Unknown", buf_sz);
+        return;
+    }
+    switch (rtwdev->chip->id) {
+    case RTW_CHIP_TYPE_8822B: strlcpy(name_buf, "RTL8822BE", buf_sz); break;
+    case RTW_CHIP_TYPE_8822C: strlcpy(name_buf, "RTL8822CE", buf_sz); break;
+    case RTW_CHIP_TYPE_8723D: strlcpy(name_buf, "RTL8723DE", buf_sz); break;
+    case RTW_CHIP_TYPE_8821C: strlcpy(name_buf, "RTL8821CE", buf_sz); break;
+    case RTW_CHIP_TYPE_8703B: strlcpy(name_buf, "RTL8703BE", buf_sz); break;
+    case RTW_CHIP_TYPE_8821A: strlcpy(name_buf, "RTL8821AE", buf_sz); break;
+    case RTW_CHIP_TYPE_8812A: strlcpy(name_buf, "RTL8812AE", buf_sz); break;
+    case RTW_CHIP_TYPE_8814A: strlcpy(name_buf, "RTL8814AE", buf_sz); break;
+    default: strlcpy(name_buf, "RTL88xx (Unknown)", buf_sz); break;
+    }
+}
+
+void rtw88_get_stats(struct rtw_dev *rtwdev, uint32_t *tx_bytes, uint32_t *rx_bytes)
+{
+    if (tx_bytes) *tx_bytes = 0;
+    if (rx_bytes) *rx_bytes = 0;
+    if (!rtwdev) return;
+    if (tx_bytes) *tx_bytes = (uint32_t)rtwdev->stats.tx_unicast;
+    if (rx_bytes) *rx_bytes = (uint32_t)rtwdev->stats.rx_unicast;
+}

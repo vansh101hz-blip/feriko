@@ -3,6 +3,7 @@
 
 #include "RTW88IEEE80211.hpp"
 #include "RTW88PCIDevice.hpp"
+#include "RTW88UserClient.hpp"
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -963,9 +964,22 @@ void RTW88IEEE80211::onTimer()
 /*  Status queries                                                       */
 /* ------------------------------------------------------------------ */
 
-IOReturn RTW88IEEE80211::cmdGetState(RTW88State *state)
+IOReturn RTW88IEEE80211::cmdGetState(struct RTW88StateResult *result)
 {
-    *state = _state;
+    if (!result) return kIOReturnBadArgument;
+
+    result->state = _state;
+    result->rssi = _rssi;
+    memcpy(result->ssid, _targetBSS.ssid, sizeof(result->ssid));
+    memcpy(result->bssid, _targetBSS.bssid, sizeof(result->bssid));
+    result->channel = _targetBSS.channel;
+    
+    memcpy(result->mac_addr, _macAddr, 6);
+
+    rtw88_get_fw_version(_rtwdev, &result->fw_version, &result->fw_sub_version);
+    rtw88_get_chip_name(_rtwdev, result->chip_name, sizeof(result->chip_name));
+    rtw88_get_stats(_rtwdev, &result->tx_byte_count, &result->rx_byte_count);
+
     return kIOReturnSuccess;
 }
 

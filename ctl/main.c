@@ -36,6 +36,12 @@ struct RTW88StateResult {
     char     ssid[33];
     int32_t  rssi;
     uint32_t channel;
+    uint8_t  mac_addr[6];
+    uint16_t fw_version;
+    uint8_t  fw_sub_version;
+    char     chip_name[32];
+    uint32_t rx_byte_count;
+    uint32_t tx_byte_count;
 };
 
 static const char *state_name(uint32_t s)
@@ -220,14 +226,22 @@ static int cmd_status(io_connect_t conn)
                 mach_error_string(kr));
         return 1;
     }
-    printf("State:   %s\n", state_name(result.state));
+    printf("State:      %s\n", state_name(result.state));
+    printf("Card:       %s\n", result.chip_name);
+    printf("MAC:        %02x:%02x:%02x:%02x:%02x:%02x\n",
+           result.mac_addr[0], result.mac_addr[1], result.mac_addr[2],
+           result.mac_addr[3], result.mac_addr[4], result.mac_addr[5]);
+    printf("Firmware:   v%u.%u\n", result.fw_version, result.fw_sub_version);
+    
     if (result.state == 5) {
-        printf("SSID:    %s\n", result.ssid[0] ? result.ssid : "(unknown)");
-        printf("BSSID:   %02x:%02x:%02x:%02x:%02x:%02x\n",
+        printf("SSID:       %s\n", result.ssid[0] ? result.ssid : "(unknown)");
+        printf("BSSID:      %02x:%02x:%02x:%02x:%02x:%02x\n",
                result.bssid[0], result.bssid[1], result.bssid[2],
                result.bssid[3], result.bssid[4], result.bssid[5]);
-        printf("RSSI:    %d dBm\n", result.rssi);
-        printf("Channel: %u\n", result.channel);
+        printf("RSSI:       %d dBm\n", result.rssi);
+        printf("Channel:    %u\n", result.channel);
+        printf("TX Bytes:   %u\n", result.tx_byte_count);
+        printf("RX Bytes:   %u\n", result.rx_byte_count);
     }
     return 0;
 }

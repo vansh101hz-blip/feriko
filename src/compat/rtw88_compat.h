@@ -147,4 +147,8 @@ void rtw88_set_fw_dir(const char *dir);
 /* Auto-detect firmware directory from boot-args or well-known paths */
 void rtw88_find_fw_dir(void);
 
+void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version);
+void rtw88_get_chip_name(struct rtw_dev *rtwdev, char *name_buf, size_t buf_sz);
+void rtw88_get_stats(struct rtw_dev *rtwdev, uint32_t *tx_bytes, uint32_t *rx_bytes);
+
 #endif /* _RTW88_COMPAT_H */

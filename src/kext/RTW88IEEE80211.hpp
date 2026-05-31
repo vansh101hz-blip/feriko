@@ -89,7 +89,7 @@ public:
     IOReturn  cmdScan();
     IOReturn  cmdConnect(const char *ssid, const char *password);
     IOReturn  cmdDisconnect();
-    IOReturn  cmdGetState(RTW88State *state);
+    IOReturn  cmdGetState(struct RTW88StateResult *result);
     IOReturn  cmdGetBSSList(uint8_t *buf, uint32_t *len);
     IOReturn  cmdGetRSSI(int *rssi);
 
