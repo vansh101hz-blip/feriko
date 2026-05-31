@@ -622,17 +622,21 @@ int RTW88PCIDevice::pciFindCapability(int cap)
 IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
                                         UInt32 type, IOUserClient **handler)
 {
+    IOLog("rtw88: RTW88PCIDevice::newUserClient() called, type=%u\n", (unsigned)type);
     RTW88UserClient *client = RTW88UserClient::create(this, owningTask);
-    if (!client) return kIOReturnNoMemory;
+    if (!client) { IOLog("rtw88: RTW88UserClient::create failed\n"); return kIOReturnNoMemory; }
     if (!client->attach(this)) {
+        IOLog("rtw88: RTW88UserClient::attach failed\n");
         client->release();
         return kIOReturnError;
     }
     if (!client->start(this)) {
+        IOLog("rtw88: RTW88UserClient::start failed (via newUserClient)\n");
         client->detach(this);
         client->release();
         return kIOReturnError;
     }
+    IOLog("rtw88: RTW88PCIDevice::newUserClient() success\n");
     *handler = client;
     return kIOReturnSuccess;
 }

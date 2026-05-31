@@ -65,25 +65,43 @@ bool RTW88UserClient::init(OSDictionary *props)
 
 bool RTW88UserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties)
 {
-    if (!super::initWithTask(owningTask, securityID, type, properties))
-        return false;
+    IOLog("rtw88: RTW88UserClient::initWithTask(4) called\n");
     _owningTask = owningTask;
+    if (!super::initWithTask(owningTask, securityID, type, properties)) {
+        IOLog("rtw88: RTW88UserClient::initWithTask(4) super failed\n");
+        return false;
+    }
+    IOLog("rtw88: RTW88UserClient::initWithTask(4) OK\n");
     return true;
 }
 
 bool RTW88UserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
 {
-    if (!super::initWithTask(owningTask, securityID, type))
-        return false;
+    IOLog("rtw88: RTW88UserClient::initWithTask(3) called\n");
     _owningTask = owningTask;
+    if (!super::initWithTask(owningTask, securityID, type)) {
+        IOLog("rtw88: RTW88UserClient::initWithTask(3) super failed\n");
+        return false;
+    }
+    IOLog("rtw88: RTW88UserClient::initWithTask(3) OK\n");
     return true;
 }
 
 bool RTW88UserClient::start(IOService *provider)
 {
-    if (!super::start(provider)) return false;
+    IOLog("rtw88: RTW88UserClient::start() called, provider=%p class=%s\n",
+          provider, provider ? provider->getMetaClass()->getClassName() : "null");
+    if (!super::start(provider)) {
+        IOLog("rtw88: RTW88UserClient::start() super::start failed\n");
+        return false;
+    }
     _provider = OSDynamicCast(RTW88PCIDevice, provider);
-    return _provider != nullptr;
+    if (!_provider) {
+        IOLog("rtw88: RTW88UserClient::start() OSDynamicCast to RTW88PCIDevice failed\n");
+        return false;
+    }
+    IOLog("rtw88: RTW88UserClient::start() OK\n");
+    return true;
 }
 
 void RTW88UserClient::stop(IOService *provider)
