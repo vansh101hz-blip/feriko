@@ -623,19 +623,35 @@ IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
                                         UInt32 type, IOUserClient **handler)
 {
     IOLog("rtw88: RTW88PCIDevice::newUserClient() called, type=%u\n", (unsigned)type);
-    RTW88UserClient *client = RTW88UserClient::create(this, owningTask);
-    if (!client) { IOLog("rtw88: RTW88UserClient::create failed\n"); return kIOReturnNoMemory; }
+
+    RTW88UserClient *client = new RTW88UserClient;
+    if (!client) {
+        IOLog("rtw88: RTW88UserClient allocation failed\n");
+        return kIOReturnNoMemory;
+    }
+
+    /* initWithTask — not init() — binds the Mach task port.
+     * Without this the kernel port is never "ready for callouts" and
+     * IOServiceOpen returns kIOReturnBadArgument before our code runs. */
+    if (!client->initWithTask(owningTask, securityID, type)) {
+        IOLog("rtw88: RTW88UserClient::initWithTask failed\n");
+        client->release();
+        return kIOReturnBadArgument;
+    }
+
     if (!client->attach(this)) {
         IOLog("rtw88: RTW88UserClient::attach failed\n");
         client->release();
         return kIOReturnError;
     }
+
     if (!client->start(this)) {
-        IOLog("rtw88: RTW88UserClient::start failed (via newUserClient)\n");
+        IOLog("rtw88: RTW88UserClient::start failed\n");
         client->detach(this);
         client->release();
         return kIOReturnError;
     }
+
     IOLog("rtw88: RTW88PCIDevice::newUserClient() success\n");
     *handler = client;
     return kIOReturnSuccess;
