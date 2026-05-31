@@ -234,7 +234,16 @@ bool RTW88PCIDevice::start(IOService *provider)
         return false;
     }
 
-    /* Attach Ethernet interface */
+    /* Run the full probe now so the MAC address is populated before
+     * the Ethernet interface is attached.  enable() will call
+     * rtw_core_start() to power on the hardware for TX/RX. */
+    IOReturn probeRet = _ieee80211->start();
+    if (probeRet != kIOReturnSuccess) {
+        IOLog("rtw88: probe failed (0x%08x)\n", probeRet);
+        return false;
+    }
+
+    /* Attach Ethernet interface — MAC is now known */
     if (!attachDevice()) return false;
 
     _initialized = true;
@@ -362,8 +371,12 @@ IOReturn RTW88PCIDevice::enable(IONetworkInterface *iface)
     if (_enabled) return kIOReturnSuccess;
     if (!_ieee80211) return kIOReturnNotReady;
 
-    IOReturn ret = _ieee80211->start();
-    if (ret != kIOReturnSuccess) return ret;
+    /* Probe ran in start(); now power on the hardware for TX/RX */
+    IOReturn ret = _ieee80211->powerOn();
+    if (ret != kIOReturnSuccess) {
+        IOLog("rtw88: powerOn failed (0x%08x)\n", ret);
+        return ret;
+    }
 
     if (_txQueue) _txQueue->start();
     if (_intrSrc) _intrSrc->enable();
@@ -379,7 +392,7 @@ IOReturn RTW88PCIDevice::disable(IONetworkInterface *iface)
     if (_intrSrc) _intrSrc->disable();
     if (_txQueue) _txQueue->stop();
     if (_txQueue) _txQueue->flush();
-    if (_ieee80211) _ieee80211->stop();
+    if (_ieee80211) _ieee80211->powerOff();
     return kIOReturnSuccess;
 }
 

@@ -252,6 +252,29 @@ void RTW88IEEE80211::stop()
 }
 
 /* ------------------------------------------------------------------ */
+/*  Power on/off (called from enable/disable)                          */
+/* ------------------------------------------------------------------ */
+
+IOReturn RTW88IEEE80211::powerOn()
+{
+    IOLog("rtw88: IEEE80211 powerOn\n");
+    if (!_rtwdev) return kIOReturnNotReady;
+    int ret = rtw_core_start(_rtwdev);
+    if (ret) {
+        IOLog("rtw88: rtw_core_start failed: %d\n", ret);
+        return kIOReturnError;
+    }
+    return kIOReturnSuccess;
+}
+
+void RTW88IEEE80211::powerOff()
+{
+    IOLog("rtw88: IEEE80211 powerOff\n");
+    if (!_rtwdev) return;
+    rtw_core_stop(_rtwdev);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Interrupt dispatch                                                  */
 /* ------------------------------------------------------------------ */
 

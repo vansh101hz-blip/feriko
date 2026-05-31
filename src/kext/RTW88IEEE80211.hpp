@@ -72,8 +72,10 @@ public:
     void      free() override;
 
     /* Called by RTW88PCIDevice */
-    IOReturn  start();
-    void      stop();
+    IOReturn  start();       /* probe: chip info, efuse, register hw */
+    void      stop();        /* full teardown */
+    IOReturn  powerOn();     /* enable: rtw_core_start */
+    void      powerOff();    /* disable: rtw_core_stop */
     void      handleInterrupt();
     UInt32    outputPacket(mbuf_t m);
     void      getMACAddress(uint8_t *mac);
