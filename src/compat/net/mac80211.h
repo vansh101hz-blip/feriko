@@ -965,8 +965,12 @@ struct ieee80211_ampdu_params {
 /*  ieee80211_hw alloc / free                                           */
 /* ------------------------------------------------------------------ */
 
-/* Implemented in rtw88_compat.c — stores hw in a global for wiphy_to_ieee80211_hw */
+/* Implemented in rtw88_compat.c */
 void rtw88_register_hw(struct ieee80211_hw *hw);
+/* CRITICAL: must be declared here so the compiler knows the return type is a
+ * pointer (64-bit), NOT int. Without this declaration, the compiler emits
+ * cltq after the call, truncating the 64-bit return value to 32 bits. */
+struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy);
 
 static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
                                                        const struct ieee80211_ops *ops)
