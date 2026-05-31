@@ -248,6 +248,7 @@ bool RTW88PCIDevice::start(IOService *provider)
 
     _initialized = true;
     IOLog("rtw88: device started successfully\n");
+    registerService();   /* publish IOKit port for IOServiceOpen / rtw88ctl */
     return true;
 }
 
