@@ -46,6 +46,8 @@ public:
     static RTW88UserClient *create(RTW88PCIDevice *dev, task_t owningTask);
 
     bool     init(OSDictionary *props) override;
+    bool     initWithTask(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties) override;
+    bool     initWithTask(task_t owningTask, void *securityID, UInt32 type) override;
     bool     start(IOService *provider) override;
     void     stop(IOService *provider) override;
     void     free() override;

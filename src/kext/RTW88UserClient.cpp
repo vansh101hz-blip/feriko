@@ -63,6 +63,22 @@ bool RTW88UserClient::init(OSDictionary *props)
     return super::init(props);
 }
 
+bool RTW88UserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties)
+{
+    if (!super::initWithTask(owningTask, securityID, type, properties))
+        return false;
+    _owningTask = owningTask;
+    return true;
+}
+
+bool RTW88UserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
+{
+    if (!super::initWithTask(owningTask, securityID, type))
+        return false;
+    _owningTask = owningTask;
+    return true;
+}
+
 bool RTW88UserClient::start(IOService *provider)
 {
     if (!super::start(provider)) return false;
