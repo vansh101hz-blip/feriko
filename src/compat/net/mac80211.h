@@ -266,7 +266,8 @@ enum nl80211_ext_feature_index {
 };
 
 struct wiphy {
-    struct ieee80211_hw *_hw;  /* back-pointer set by ieee80211_alloc_hw */
+    void *_dev;  /* rtw_dev pointer — stored at offset 0 so wiphy_to_ieee80211_hw
+                  * can return (ieee80211_hw*)wiphy and hw->priv (offset 0) = rtwdev */
     struct ieee80211_supported_band *bands[NL80211_NUM_BANDS];
     u32   interface_modes;
     u32   flags;
@@ -976,8 +977,11 @@ static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
     hw->priv = (u8 *)hw + sizeof(*hw);
     hw->wiphy = (struct wiphy *)kzalloc(sizeof(struct wiphy), GFP_KERNEL);
     if (!hw->wiphy) { kfree(hw); return NULL; }
-    hw->wiphy->_hw = hw;       /* back-pointer (belt) */
-    rtw88_register_hw(hw);     /* global fallback (suspenders) */
+    /* Store rtwdev (= hw->priv) at wiphy offset 0 so that
+     * wiphy_to_ieee80211_hw can return (ieee80211_hw*)wiphy
+     * and callers reading hw->priv (offset 0) get rtwdev. */
+    hw->wiphy->_dev = hw->priv;
+    rtw88_register_hw(hw);     /* belt: global fallback */
     return hw;
 }
 

@@ -552,18 +552,19 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
  * Simpler and more reliable than a struct back-pointer for a single-device driver. */
 static struct ieee80211_hw *g_rtw88_hw = NULL;
 
-void rtw88_register_hw(struct ieee80211_hw *hw)
-{
-    IOLog("rtw88: rtw88_register_hw called: hw=%p priv=%p\n",
-          (void *)hw, hw ? hw->priv : NULL);
-    g_rtw88_hw = hw;
-}
+void rtw88_register_hw(struct ieee80211_hw *hw) { g_rtw88_hw = hw; }
 
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 {
-    IOLog("rtw88: wiphy_to_ieee80211_hw: g_rtw88_hw=%p\n", (void *)g_rtw88_hw);
-    (void)wiphy;
-    return g_rtw88_hw;
+    /*
+     * wiphy->_dev (offset 0 in struct wiphy) holds rtwdev.
+     * struct ieee80211_hw::priv is also at offset 0.
+     * Casting wiphy to ieee80211_hw* lets callers do hw->priv
+     * and get rtwdev directly from wiphy memory — always valid
+     * as long as wiphy itself is alive (which it is during probe).
+     */
+    if (!wiphy) return g_rtw88_hw;  /* fallback: global */
+    return (struct ieee80211_hw *)wiphy;
 }
 
 int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
