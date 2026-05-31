@@ -62,7 +62,8 @@ public:
 
     /* IOUserClient creation */
     IOReturn newUserClient(task_t owningTask, void *securityID,
-                           UInt32 type, IOUserClient **handler) override;
+                           UInt32 type, OSDictionary *properties,
+                           IOUserClient **handler) override;
 
     /* Called from interrupt handler */
     void handleInterrupt(IOInterruptEventSource *src, int count);

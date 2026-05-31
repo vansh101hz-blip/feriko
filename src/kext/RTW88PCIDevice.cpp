@@ -621,7 +621,8 @@ int RTW88PCIDevice::pciFindCapability(int cap)
 /* ------------------------------------------------------------------ */
 
 IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
-                                        UInt32 type, IOUserClient **handler)
+                                        UInt32 type, OSDictionary *properties,
+                                        IOUserClient **handler)
 {
     IOLog("rtw88: RTW88PCIDevice::newUserClient() called, type=%u\n", (unsigned)type);
 
@@ -634,7 +635,7 @@ IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
     /* initWithTask — not init() — binds the Mach task port.
      * Without this the kernel port is never "ready for callouts" and
      * IOServiceOpen returns kIOReturnBadArgument before our code runs. */
-    if (!client->initWithTask(owningTask, securityID, type)) {
+    if (!client->initWithTask(owningTask, securityID, type, properties)) {
         IOLog("rtw88: RTW88UserClient::initWithTask failed\n");
         client->release();
         return kIOReturnBadArgument;
