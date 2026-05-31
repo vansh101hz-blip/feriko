@@ -10,6 +10,13 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <machine/endian.h>
+
+#ifndef __LITTLE_ENDIAN
+#if defined(__LITTLE_ENDIAN__) || (defined(BYTE_ORDER) && BYTE_ORDER == LITTLE_ENDIAN)
+#define __LITTLE_ENDIAN 1
+#endif
+#endif
 
 #ifdef KERNEL
 /* In KERNEL (C++) builds, use MacKernelSDK's string.h which provides
