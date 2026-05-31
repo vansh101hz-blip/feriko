@@ -35,6 +35,11 @@ void rtw_pci_remove(struct pci_dev *pdev);
 /* Exported from the compat layer for hooking */
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw);
 
+/* Use rtw88_get_hw() to retrieve the registered ieee80211_hw pointer.
+ * Do NOT add 'extern struct ieee80211_hw *g_rtw88_hw' here — g_rtw88_hw has
+ * static linkage in rtw88_compat.c; a direct extern declaration is UB and
+ * resolves to a garbage address at run time, causing a kernel panic. */
+
 /* chip hw_spec structs — driver_data for rtw_pci_probe */
 extern const struct rtw_chip_info rtw8822b_hw_spec;
 extern const struct rtw_chip_info rtw8822c_hw_spec;
@@ -197,14 +202,25 @@ IOReturn RTW88IEEE80211::start()
         return kIOReturnError;
     }
 
-    /* rtw_pci_probe stores rtwdev in pdev->driver_data */
-    _rtwdev = (struct rtw_dev *)_pcidev->driver_data;
-    _hw     = _rtwdev ? *(struct ieee80211_hw **)_rtwdev : nullptr;
+    /* Use the hw pointer that ieee80211_alloc_hw() registered in the compat
+     * layer via rtw88_register_hw().  rtw88_get_hw() is the external-linkage
+     * accessor for the static g_rtw88_hw variable — avoids both the fragile
+     * *(ieee80211_hw **)rtwdev double-dereference and the UB of declaring
+     * 'extern' on a static variable from another TU. */
+    _hw = rtw88_get_hw();
+
+    /* rtwdev is hw->priv (allocated contiguously after ieee80211_hw in alloc_hw).
+     * Note: rtw_pci_probe stores hw (not rtwdev) in pdev->driver_data via pci_set_drvdata(). */
+    if (_hw) {
+        _rtwdev = (struct rtw_dev *)_hw->priv;
+    } else {
+        _rtwdev = nullptr;
+    }
 
     RTW88_STAGE("rtwdev=%p hw=%p", (void *)_rtwdev, (void *)_hw);
 
-    /* Read MAC address — rtw_register_hw copies it to wiphy->perm_addr
-     * via SET_IEEE80211_PERM_ADDR, so read from there after probe. */
+    /* Read MAC address — SET_IEEE80211_PERM_ADDR() copies EFuse MAC into
+     * hw->wiphy->perm_addr during rtw_register_hw(); read it from there. */
     if (_hw && _hw->wiphy) {
         memcpy(_macAddr, _hw->wiphy->perm_addr, 6);
         IOLog("rtw88: MAC address: %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -212,9 +228,10 @@ IOReturn RTW88IEEE80211::start()
               _macAddr[3], _macAddr[4], _macAddr[5]);
     }
 
-    /* Create virtual interface in the driver */
-    if (_hw && _hw->priv) {
-        _rtwdev = (struct rtw_dev *)_hw->priv;
+    /* Create virtual interface in the driver.
+     * NOTE: _rtwdev must NOT be reassigned here. It has been correctly set from
+     * _hw->priv above. */
+    if (_hw) {
         RTW88_STAGE("adding STA interface");
         _vif = (struct ieee80211_vif *)IOMallocZero(
             sizeof(struct ieee80211_vif) + 128);

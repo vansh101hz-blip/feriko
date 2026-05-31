@@ -967,6 +967,13 @@ struct ieee80211_ampdu_params {
 
 /* Implemented in rtw88_compat.c */
 void rtw88_register_hw(struct ieee80211_hw *hw);
+/* rtw88_get_hw: external-linkage accessor for the static g_rtw88_hw pointer.
+ * Use this instead of 'extern struct ieee80211_hw *g_rtw88_hw' — the variable
+ * has internal linkage so a direct extern declaration is UB and resolves to an
+ * arbitrary symbol, producing a garbage pointer and a kernel panic.
+ * CRITICAL: declared here (not implicitly) so the compiler knows the return
+ * type is a 64-bit pointer, not int. */
+struct ieee80211_hw *rtw88_get_hw(void);
 /* CRITICAL: must be declared here so the compiler knows the return type is a
  * pointer (64-bit), NOT int. Without this declaration, the compiler emits
  * cltq after the call, truncating the 64-bit return value to 32 bits. */

@@ -554,6 +554,11 @@ static struct ieee80211_hw *g_rtw88_hw = NULL;
 
 void rtw88_register_hw(struct ieee80211_hw *hw) { g_rtw88_hw = hw; }
 
+/* Accessor with external linkage so C++ TUs can retrieve the pointer without
+ * declaring 'extern struct ieee80211_hw *g_rtw88_hw' — which would be UB
+ * because the variable has internal (static) linkage. */
+struct ieee80211_hw *rtw88_get_hw(void) { return g_rtw88_hw; }
+
 struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 {
     /*

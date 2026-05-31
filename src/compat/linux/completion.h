@@ -18,31 +18,40 @@ static inline void init_completion(struct completion *c)
 {
     c->done = 0;
     c->lock = IOLockAlloc();
+    IOLog("rtw88: init_completion(%p) lock=%p\n", (void *)c, (void *)c->lock);
 }
 
 static inline void complete(struct completion *c)
 {
+    IOLog("rtw88: complete(%p) enter, done=%u\n", (void *)c, c->done);
     IOLockLock(c->lock);
     c->done++;
     IOLockWakeup(c->lock, (void *)c, false);
     IOLockUnlock(c->lock);
+    IOLog("rtw88: complete(%p) exit, done=%u\n", (void *)c, c->done);
 }
 
 static inline void complete_all(struct completion *c)
 {
+    IOLog("rtw88: complete_all(%p) enter, done=%u\n", (void *)c, c->done);
     IOLockLock(c->lock);
     c->done = ~0u;
     IOLockWakeup(c->lock, (void *)c, false);
     IOLockUnlock(c->lock);
+    IOLog("rtw88: complete_all(%p) exit, done=%u\n", (void *)c, c->done);
 }
 
 static inline void wait_for_completion(struct completion *c)
 {
+    IOLog("rtw88: wait_for_completion(%p) enter, done=%u, lock=%p\n", (void *)c, c->done, (void *)c->lock);
     IOLockLock(c->lock);
-    while (!c->done)
+    while (!c->done) {
+        IOLog("rtw88: wait_for_completion(%p) sleeping...\n", (void *)c);
         IOLockSleep(c->lock, (void *)c, THREAD_UNINT);
+    }
     if (c->done != ~0u) c->done--;
     IOLockUnlock(c->lock);
+    IOLog("rtw88: wait_for_completion(%p) exit, done=%u\n", (void *)c, c->done);
 }
 
 /* Returns remaining jiffies (1) on completion, 0 on timeout */
