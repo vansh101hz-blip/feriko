@@ -57,18 +57,12 @@ static const char *state_name(uint32_t s)
 /* ------------------------------------------------------------------ */
 static io_connect_t open_kext(void)
 {
-    /* IOServiceMatching creates {IOProviderClass:name}, which finds CHILDREN
-     * of that class — not the class itself.  We need {IOClass:name} to find
-     * RTW88PCIDevice directly so IOServiceOpen can call newUserClient on it. */
-    CFMutableDictionaryRef matching = CFDictionaryCreateMutable(
-        kCFAllocatorDefault, 0,
-        &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
+    /* IOServiceMatching finds the instantiated C++ IOService object */
+    CFMutableDictionaryRef matching = IOServiceMatching("RTW88PCIDevice");
     if (!matching) {
         fprintf(stderr, "rtw88ctl: failed to create matching dict\n");
         return MACH_PORT_NULL;
     }
-    CFDictionarySetValue(matching, CFSTR("IOClass"), CFSTR("RTW88PCIDevice"));
 
     io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault,
                                                        matching);
