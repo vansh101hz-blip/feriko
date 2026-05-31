@@ -58,6 +58,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88PCIDevice</string>
             <key>IOPCIMatch</key>
@@ -76,6 +78,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88PCIDevice</string>
             <key>IOPCIMatch</key>
@@ -94,6 +98,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88PCIDevice</string>
             <key>IOPCIMatch</key>
@@ -112,6 +118,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88PCIDevice</string>
             <key>IOPCIMatch</key>
@@ -130,6 +138,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88PCIDevice</string>
             <key>IOPCIMatch</key>
@@ -148,6 +158,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88USBDevice</string>
             <key>idVendor</key>
@@ -168,6 +180,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88USBDevice</string>
             <key>idVendor</key>
@@ -188,6 +202,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88USBDevice</string>
             <key>idVendor</key>
@@ -208,6 +224,8 @@
         <dict>
             <key>CFBundleIdentifier</key>
             <string>com.rtw88.driver</string>
+            <key>IOUserClientClass</key>
+            <string>RTW88UserClient</string>
             <key>IOClass</key>
             <string>RTW88USBDevice</string>
             <key>idVendor</key>
