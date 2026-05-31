@@ -145,14 +145,14 @@ IOReturn RTW88UserClient::externalMethod(uint32_t selector,
 IOReturn RTW88UserClient::sScan(RTW88UserClient *uc, void *ref,
                                   IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
+    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnOffline;
     return uc->_provider->get80211()->cmdScan();
 }
 
 IOReturn RTW88UserClient::sConnect(RTW88UserClient *uc, void *ref,
                                      IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
+    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnOffline;
     if (!args->structureInput || args->structureInputSize < sizeof(RTW88ConnectArgs))
         return kIOReturnBadArgument;
 
@@ -163,7 +163,7 @@ IOReturn RTW88UserClient::sConnect(RTW88UserClient *uc, void *ref,
 IOReturn RTW88UserClient::sDisconnect(RTW88UserClient *uc, void *ref,
                                         IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
+    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnOffline;
     return uc->_provider->get80211()->cmdDisconnect();
 }
 
@@ -192,8 +192,11 @@ IOReturn RTW88UserClient::sGetState(RTW88UserClient *uc, void *ref,
 IOReturn RTW88UserClient::sGetBSSList(RTW88UserClient *uc, void *ref,
                                         IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
     if (!args->structureOutput) return kIOReturnBadArgument;
+    if (!uc->_provider || !uc->_provider->get80211()) {
+        args->structureOutputSize = 0;
+        return kIOReturnSuccess;
+    }
 
     uint32_t len = (uint32_t)args->structureOutputSize;
     IOReturn ret = uc->_provider->get80211()->cmdGetBSSList(
@@ -205,11 +208,14 @@ IOReturn RTW88UserClient::sGetBSSList(RTW88UserClient *uc, void *ref,
 IOReturn RTW88UserClient::sGetRSSI(RTW88UserClient *uc, void *ref,
                                      IOExternalMethodArguments *args)
 {
-    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnNotReady;
+    if (!args->scalarOutput || args->scalarOutputCount < 1) return kIOReturnBadArgument;
+    if (!uc->_provider || !uc->_provider->get80211()) {
+        args->scalarOutput[0] = (uint64_t)(int64_t)-100;
+        return kIOReturnSuccess;
+    }
     int rssi = -100;
     IOReturn ret = uc->_provider->get80211()->cmdGetRSSI(&rssi);
-    if (args->scalarOutput && args->scalarOutputCount >= 1)
-        args->scalarOutput[0] = (uint64_t)(int64_t)rssi;
+    args->scalarOutput[0] = (uint64_t)(int64_t)rssi;
     return ret;
 }
 
@@ -223,13 +229,19 @@ IOReturn RTW88UserClient::sSetDebug(RTW88UserClient *uc, void *ref,
     return kIOReturnSuccess;
 }
 
+extern "C" {
+    uint32_t rtw88_read_log(char *out_buf, uint32_t max_len);
+}
+
 IOReturn RTW88UserClient::sGetLog(RTW88UserClient *uc, void *ref,
                                     IOExternalMethodArguments *args)
 {
-    /* Future: ring-buffer log */
-    if (args->structureOutput && args->structureOutputSize >= 5) {
-        memcpy(args->structureOutput, "OK\n", 3);
-        args->structureOutputSize = 3;
-    }
+    if (!args->structureOutput || args->structureOutputSize == 0)
+        return kIOReturnBadArgument;
+
+    uint32_t max_len = (uint32_t)args->structureOutputSize;
+    uint32_t read = rtw88_read_log((char *)args->structureOutput, max_len);
+    
+    args->structureOutputSize = read;
     return kIOReturnSuccess;
 }

@@ -13,6 +13,25 @@ int rtw88_log_level = KERN_DEBUG;
 
 struct task_struct *__rtw88_current_task = NULL;
 
+static IOSimpleLock *rtw88_log_lock = NULL;
+static char rtw88_log_ring[8192];
+static uint32_t rtw88_log_head = 0;
+static uint32_t rtw88_log_tail = 0;
+
+static void rtw88_log_append(const char *msg)
+{
+    if (!rtw88_log_lock) return;
+    IOSimpleLockLock(rtw88_log_lock);
+    while (*msg) {
+        rtw88_log_ring[rtw88_log_head] = *msg++;
+        rtw88_log_head = (rtw88_log_head + 1) % sizeof(rtw88_log_ring);
+        if (rtw88_log_head == rtw88_log_tail) {
+            rtw88_log_tail = (rtw88_log_tail + 1) % sizeof(rtw88_log_ring);
+        }
+    }
+    IOSimpleLockUnlock(rtw88_log_lock);
+}
+
 void rtw88_printk(int level, const char *fmt, ...)
 {
     if (level > rtw88_log_level) return;
@@ -26,6 +45,10 @@ void rtw88_printk(int level, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     IOLog("[rtw88 %s] %s", ls, buf);
+    
+    char ring_msg[512];
+    snprintf(ring_msg, sizeof(ring_msg), "[rtw88 %s] %s", ls, buf);
+    rtw88_log_append(ring_msg);
 }
 
 void rtw88_dev_printk(int level, struct device *dev, const char *fmt, ...)
@@ -42,6 +65,11 @@ void rtw88_dev_printk(int level, struct device *dev, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     IOLog("[rtw88 %s %s] %s", ls, name, buf);
+    
+    char ring_msg[512];
+    snprintf(ring_msg, sizeof(ring_msg), "[rtw88 %s %s] %s", ls, name, buf);
+    rtw88_log_append(ring_msg);
+    
     /* Pause on errors so the message is readable before any subsequent crash */
     if (level == KERN_ERR) IOSleep(2000);
 }
@@ -662,9 +690,10 @@ int timer_delete_sync(struct timer_list *timer)
 
 int rtw88_compat_init(void)
 {
+    rtw88_log_lock = IOSimpleLockAlloc();
     system_wq      = alloc_workqueue("rtw88_system_wq", 0, 0);
     system_long_wq = alloc_workqueue("rtw88_long_wq",   0, 0);
-    if (!system_wq || !system_long_wq) return -ENOMEM;
+    if (!system_wq || !system_long_wq || !rtw88_log_lock) return -ENOMEM;
     return 0;
 }
 
@@ -673,6 +702,10 @@ void rtw88_compat_exit(void)
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;
+    if (rtw88_log_lock) {
+        IOSimpleLockFree(rtw88_log_lock);
+        rtw88_log_lock = NULL;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -718,4 +751,18 @@ void rtw88_get_stats(struct rtw_dev *rtwdev, uint32_t *tx_bytes, uint32_t *rx_by
     if (!rtwdev) return;
     if (tx_bytes) *tx_bytes = (uint32_t)rtwdev->stats.tx_unicast;
     if (rx_bytes) *rx_bytes = (uint32_t)rtwdev->stats.rx_unicast;
+}
+
+uint32_t rtw88_read_log(char *out_buf, uint32_t max_len)
+{
+    if (!out_buf || max_len == 0 || !rtw88_log_lock) return 0;
+    
+    uint32_t read = 0;
+    IOSimpleLockLock(rtw88_log_lock);
+    while (rtw88_log_tail != rtw88_log_head && read < max_len) {
+        out_buf[read++] = rtw88_log_ring[rtw88_log_tail];
+        rtw88_log_tail = (rtw88_log_tail + 1) % sizeof(rtw88_log_ring);
+    }
+    IOSimpleLockUnlock(rtw88_log_lock);
+    return read;
 }

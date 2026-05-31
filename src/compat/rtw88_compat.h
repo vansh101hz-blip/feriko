@@ -150,5 +150,6 @@ void rtw88_find_fw_dir(void);
 void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version);
 void rtw88_get_chip_name(struct rtw_dev *rtwdev, char *name_buf, size_t buf_sz);
 void rtw88_get_stats(struct rtw_dev *rtwdev, uint32_t *tx_bytes, uint32_t *rx_bytes);
+uint32_t rtw88_read_log(char *out_buf, uint32_t max_len);
 
 #endif /* _RTW88_COMPAT_H */
