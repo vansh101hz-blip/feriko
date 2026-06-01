@@ -94,6 +94,8 @@ static io_connect_t open_kext(void)
 /*  Commands                                                            */
 /* ------------------------------------------------------------------ */
 
+static int cmd_list(io_connect_t conn); /* forward */
+
 static int cmd_scan(io_connect_t conn, int wait_secs)
 {
     kern_return_t kr = IOConnectCallScalarMethod(conn, kRTW88Scan,
@@ -102,15 +104,33 @@ static int cmd_scan(io_connect_t conn, int wait_secs)
         fprintf(stderr, "rtw88ctl: scan failed: %s\n", mach_error_string(kr));
         return 1;
     }
+
     printf("Scanning");
     fflush(stdout);
+
+    /* Poll state until scan is done (kext returns to idle) or timeout.
+     * The kernel scan is async; we wait here so the user sees the
+     * results immediately after the command returns. */
+    int done = 0;
     for (int i = 0; i < wait_secs; i++) {
         sleep(1);
         putchar('.');
         fflush(stdout);
+
+        struct RTW88StateResult result = {};
+        size_t sz = sizeof(result);
+        if (IOConnectCallStructMethod(conn, kRTW88GetState,
+                                      NULL, 0, &result, &sz) == KERN_SUCCESS) {
+            /* state==1 is SCANNING; anything else (idle) means done */
+            if (result.state != 1) { done = 1; break; }
+        }
     }
     putchar('\n');
-    return 0;
+    if (!done)
+        printf("Scan still running after %d s — showing partial results.\n",
+               wait_secs);
+
+    return cmd_list(conn);
 }
 
 static int cmd_list(io_connect_t conn)
@@ -294,8 +314,8 @@ static void usage(const char *argv0)
         "Usage: %s <command> [options]\n"
         "\n"
         "Commands:\n"
-        "  scan [-w <secs>]         Scan for WiFi networks (default wait: 5s)\n"
-        "  list                     Show scan results\n"
+        "  scan [-w <secs>]         Scan and print results when done (default 10s)\n"
+        "  list                     Show last scan results without re-scanning\n"
         "  connect <ssid> [pass]    Connect to a network\n"
         "  disconnect               Disconnect\n"
         "  status                   Show current connection status\n"
@@ -333,7 +353,7 @@ int main(int argc, char *argv[])
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "scan") == 0) {
-        int wait = 5;
+        int wait = 10;
         int opt;
         while ((opt = getopt(argc - 1, argv + 1, "w:")) != -1) {
             if (opt == 'w') wait = atoi(optarg);
