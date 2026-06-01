@@ -604,7 +604,7 @@ IOReturn RTW88IEEE80211::cmdScan()
     }
     /* Timeout: if scan doesn't complete in 10s */
     _timeoutMs = 10000;
-    _timer->setTimeout(_timeoutMs, kMillisecondScale);
+    uint64_t d; clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d); _timer->wakeAtTime(d);
     return kIOReturnSuccess;
 }
 
@@ -662,7 +662,7 @@ void RTW88IEEE80211::doAuthenticate()
     txMgmtFrame(auth, authlen);
 
     _state = RTW88_STATE_AUTHENTICATING;
-    _timer->setTimeout(3000, kMillisecondScale);
+    uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d); _timer->wakeAtTime(d);
 }
 
 void RTW88IEEE80211::doAssociate()
@@ -675,7 +675,7 @@ void RTW88IEEE80211::doAssociate()
     txMgmtFrame(assoc, assoclen);
 
     _state = RTW88_STATE_ASSOCIATING;
-    _timer->setTimeout(3000, kMillisecondScale);
+    uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d); _timer->wakeAtTime(d);
 }
 
 bool RTW88IEEE80211::buildAuthReq(uint8_t *buf, uint32_t *len)
@@ -1014,13 +1014,15 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
 {
     if (!buf || !len) return kIOReturnBadArgument;
 
-    uint32_t written = 4; // reserve first 4 bytes for total length
     uint32_t max     = *len;
+    if (max > 16384) max = 16384;
 
     if (max < 4) {
         *len = 0;
-        return kIOReturnNoSpace;
+        return kIOReturnSuccess;
     }
+    
+    uint32_t written = 4; // reserve first 4 bytes for total length
 
     IOLockLock(_bssLock);
     for (RTW88BSS *b = _bssList; b; b = b->next) {
