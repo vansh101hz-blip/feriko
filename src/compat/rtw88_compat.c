@@ -352,6 +352,18 @@ struct rtw88_hw_callbacks {
 static struct rtw88_hw_callbacks *g_hw_cbs = NULL;
 static void *g_kext_hw = NULL;
 
+irq_handler_t g_irq_handler = NULL;
+irq_handler_t g_irq_thread_fn = NULL;
+void *g_irq_dev_id = NULL;
+
+void rtw88_trigger_interrupt(void)
+{
+    if (g_irq_handler && g_irq_dev_id)
+        g_irq_handler(0, g_irq_dev_id);
+    if (g_irq_thread_fn && g_irq_dev_id)
+        g_irq_thread_fn(0, g_irq_dev_id);
+}
+
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
 {
     g_hw_cbs  = cbs;

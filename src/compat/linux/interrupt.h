@@ -69,22 +69,33 @@ struct napi_struct {
     int running;
 };
 
-static inline void netif_napi_add(struct net_device *dev,
-                                   struct napi_struct *napi,
-                                   int (*poll)(struct napi_struct *, int)) {}
+#define netif_napi_add(dev, napi_ptr, poll_fn) do { \
+    (napi_ptr)->poll = (poll_fn); \
+    (napi_ptr)->weight = 64; \
+} while (0)
+
 static inline void napi_enable(struct napi_struct *napi) {}
 static inline void napi_disable(struct napi_struct *napi) {}
-static inline void napi_schedule(struct napi_struct *napi) {}
+static inline void napi_schedule(struct napi_struct *napi) {
+    if (napi && napi->poll) napi->poll(napi, 64);
+}
 static inline void napi_complete(struct napi_struct *napi) {}
 static inline int napi_reschedule(struct napi_struct *napi) { return 0; }
 static inline void napi_synchronize(struct napi_struct *napi) {}
 static inline void netif_napi_del(struct napi_struct *napi) {}
 static inline int napi_complete_done(struct napi_struct *napi, int work) { return 1; }
 
+extern irq_handler_t g_irq_handler;
+extern irq_handler_t g_irq_thread_fn;
+extern void *g_irq_dev_id;
+
 static inline int devm_request_threaded_irq(struct device *dev, unsigned int irq,
         irq_handler_t handler, irq_handler_t thread_fn,
         unsigned long flags, const char *name, void *dev_id)
 {
+    g_irq_handler = handler;
+    g_irq_thread_fn = thread_fn;
+    g_irq_dev_id = dev_id;
     return 0;
 }
 

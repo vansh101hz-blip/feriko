@@ -296,17 +296,11 @@ void RTW88IEEE80211::powerOff()
 /*  Interrupt dispatch                                                  */
 /* ------------------------------------------------------------------ */
 
+extern "C" void rtw88_trigger_interrupt(void);
+
 void RTW88IEEE80211::handleInterrupt()
 {
-    /* The Linux driver's interrupt handler is registered through the
-     * pci.c rtw_pci_interrupt_handler; it was set up during probe.
-     * We trigger it by invoking the kext interrupt dispatch here.
-     *
-     * In the real implementation this is wired via IOInterruptEventSource
-     * directly to the Linux handler.  For now dispatch via a workqueue
-     * to be safe (the Linux handler may sleep).
-     */
-    /* NOTE: actual IRQ routing is set up in pci.c via rtw_pci_napi_start */
+    rtw88_trigger_interrupt();
 }
 
 /* ------------------------------------------------------------------ */
