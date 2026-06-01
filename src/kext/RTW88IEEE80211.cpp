@@ -1387,7 +1387,7 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
     if (!buf || !len) return kIOReturnBadArgument;
 
     uint32_t max     = *len;
-    if (max > 16384) max = 16384;
+    if (max > 4095) max = 4095;
 
     if (max < 4) {
         *len = 0;
@@ -1401,7 +1401,7 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
           _bssCount, (void *)_bssList);
     for (RTW88BSS *b = _bssList; b; b = b->next) {
         /* Each entry: ssid_len(1), ssid(ssid_len), bssid(6), rssi(2),
-         *             channel(1), cipher(4) = variable */
+         *             channel(1), cipher(4) */
         uint32_t entry_sz = 1 + b->ssid_len + 6 + 2 + 1 + 4;
         IOLog("rtw88: BSS entry: ssid_len=%u ssid='%.32s' bssid=%02x:%02x:%02x:%02x:%02x:%02x "
               "rssi=%d ch=%u cipher=0x%08x entry_sz=%u\n",

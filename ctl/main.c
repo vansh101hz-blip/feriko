@@ -135,7 +135,10 @@ static int cmd_scan(io_connect_t conn, int wait_secs)
 
 static int cmd_list(io_connect_t conn)
 {
-    uint8_t buf[16 * 1024] = {};
+    /* Must stay ≤ 4095 bytes — IOKit MIG inband limit is 4096.
+     * Larger buffers switch to the OOL descriptor path where
+     * args->structureOutput is NULL, causing a silent empty result. */
+    uint8_t buf[4095] = {};
     size_t  len = sizeof(buf);
 
     kern_return_t kr = IOConnectCallStructMethod(conn, kRTW88GetBSSList,
