@@ -120,53 +120,54 @@ static dma_addr_t compat_dma_map(struct device *dev, void *ptr,
                                    size_t size, int dir)
 {
     /*
-     * Resolve the kernel VA → physical address. If the page is already
-     * below the 4GB line (typical for skb data allocated via
-     * rtw88_dma_alloc_skbdata), return that PA directly — no copy, the
-     * chip DMAs in and out of the same memory the driver reads/writes.
+     * Always bounce: allocate a physically-contiguous <4GB buffer, record the
+     * original CPU VA in orig_va, and hand the chip the bounce PA.
      *
-     * Only fall back to a bounce buffer if the source happens to live
-     * above 4GB (rare — kmalloc paths that don't go through the skb
-     * allocator). For DMA_FROM_DEVICE this fallback would still leave
-     * the original buffer untouched, so we treat that as an error.
+     * DMA_TO_DEVICE (1): copy ptr→bounce now; chip reads from bounce.
+     * DMA_FROM_DEVICE (0): don't copy now; chip writes to bounce.
+     *   dma_sync_single_for_cpu() will copy bounce→ptr after chip is done.
+     *
+     * This is the standard software bounce-buffer strategy.  It costs a memcpy
+     * per RX packet but is always correct regardless of where IOMalloc places
+     * the skb data pages.
      */
     if (!g_pci_dev_instance || !ptr) return 0;
-
-    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(
-        (mach_vm_address_t)ptr, size, kIODirectionInOut, kernel_task);
-    if (md && md->prepare() == kIOReturnSuccess) {
-        addr64_t pa = md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-        md->complete();
-        md->release();
-        if (pa && pa <= 0xFFFFFFFFULL)
-            return (dma_addr_t)pa;
-    } else if (md) {
-        md->release();
-    }
-
-    /* Above 4GB — bounce only for TX (DMA_TO_DEVICE / BIDIRECTIONAL).
-     * RX from a high-memory buffer would silently drop incoming data,
-     * so refuse it and let dma_mapping_error() report failure. */
-    if (dir == 0 /* DMA_FROM_DEVICE */)
-        return 0;
 
     IOPhysicalAddress phys = 0;
     void *bounce = g_pci_dev_instance->allocCoherent(size, &phys);
     if (!bounce) return 0;
-    memcpy(bounce, ptr, size);
+
+    /* Store the original VA so sync_for_cpu can copy the received data back */
+    g_pci_dev_instance->setBounceOrigVA((IOPhysicalAddress)phys, ptr);
+
+    /* TX: feed the chip data now */
+    if (dir == 1 /* DMA_TO_DEVICE */ || dir == 2 /* DMA_BIDIRECTIONAL */)
+        memcpy(bounce, ptr, size);
+
     return (dma_addr_t)phys;
 }
 static void compat_dma_unmap(struct device *dev, dma_addr_t addr,
                                size_t size, int dir)
 {
-    /* Free the bounce buffer allocated in compat_dma_map, looked up by phys */
+    /* Free the bounce buffer; freeCoherentByPhys is a no-op if not found */
     if (g_pci_dev_instance)
         g_pci_dev_instance->freeCoherentByPhys((IOPhysicalAddress)addr);
 }
 static void compat_dma_sync_cpu(struct device *dev, dma_addr_t addr,
-                                  size_t size, int dir) {}
+                                  size_t size, int dir)
+{
+    /*
+     * RX: chip finished writing to the bounce buffer.  Copy it into the
+     * original skb->data buffer so the driver can read it from there.
+     */
+    if (dir == 0 /* DMA_FROM_DEVICE */ && g_pci_dev_instance)
+        g_pci_dev_instance->syncBounceForCpu((IOPhysicalAddress)addr, size);
+}
 static void compat_dma_sync_dev(struct device *dev, dma_addr_t addr,
-                                  size_t size, int dir) {}
+                                  size_t size, int dir)
+{
+    /* Re-arm for next DMA: bounce is already in place, nothing to do */
+}
 
 static struct rtw88_dma_alloc_ops _dma_ops = {
     .alloc_coherent         = compat_dma_alloc,
@@ -176,28 +177,6 @@ static struct rtw88_dma_alloc_ops _dma_ops = {
     .sync_single_for_cpu    = compat_dma_sync_cpu,
     .sync_single_for_device = compat_dma_sync_dev,
 };
-
-/* ------------------------------------------------------------------ */
-/*  Low-memory skb data allocator                                       */
-/*                                                                      */
-/*  Every skb->head must live below the 4GB physical address line so   */
-/*  the chip can DMA into it directly (RX) and from it directly (TX).  */
-/*  These bridges expose RTW88PCIDevice::allocCoherent/freeCoherent    */
-/*  to the C skb shim in linux/skbuff.h.                               */
-/* ------------------------------------------------------------------ */
-
-extern "C" void *rtw88_dma_alloc_skbdata(size_t size)
-{
-    if (!g_pci_dev_instance) return nullptr;
-    IOPhysicalAddress phys = 0;
-    return g_pci_dev_instance->allocCoherent(size, &phys);
-}
-
-extern "C" void rtw88_dma_free_skbdata(void *data, size_t size)
-{
-    if (g_pci_dev_instance && data)
-        g_pci_dev_instance->freeCoherent(size, data, 0);
-}
 
 /* ------------------------------------------------------------------ */
 /*  IOService lifecycle                                                 */
@@ -626,6 +605,37 @@ void RTW88PCIDevice::freeCoherentByPhys(IOPhysicalAddress phys)
             return;
         }
         prev = &e->next;
+    }
+    IOSimpleLockUnlock(_dmaLock);
+}
+
+void RTW88PCIDevice::setBounceOrigVA(IOPhysicalAddress phys, void *orig_va)
+{
+    IOSimpleLockLock(_dmaLock);
+    for (DMAEntry *e = _dmaList; e; e = e->next) {
+        if (e->phys == phys) {
+            e->orig_va = orig_va;
+            break;
+        }
+    }
+    IOSimpleLockUnlock(_dmaLock);
+}
+
+void RTW88PCIDevice::syncBounceForCpu(IOPhysicalAddress dma, size_t size)
+{
+    /*
+     * Called by dma_sync_single_for_cpu(DMA_FROM_DEVICE) after the chip
+     * has finished writing received packet data into the bounce buffer.
+     * Copy bounce → original skb->data so the driver can parse the packet.
+     */
+    IOSimpleLockLock(_dmaLock);
+    for (DMAEntry *e = _dmaList; e; e = e->next) {
+        if (e->phys == dma && e->orig_va && e->virt) {
+            size_t copy_len = (size <= e->size) ? size : e->size;
+            IOSimpleLockUnlock(_dmaLock);
+            memcpy(e->orig_va, e->virt, copy_len);
+            return;
+        }
     }
     IOSimpleLockUnlock(_dmaLock);
 }

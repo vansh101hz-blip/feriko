@@ -75,6 +75,9 @@ public:
     void *allocCoherent(size_t size, IOPhysicalAddress *phys);
     void  freeCoherent(size_t size, void *virt, IOPhysicalAddress phys);
     void  freeCoherentByPhys(IOPhysicalAddress phys);
+    /* Bounce buffer helpers for dma_map_single / dma_sync_single_for_cpu */
+    void  setBounceOrigVA(IOPhysicalAddress phys, void *orig_va);
+    void  syncBounceForCpu(IOPhysicalAddress dma, size_t size);
 
     /* PCI config space — used by Linux compat pci_read/write_config_* */
     UInt8  pciReadByte(int offset);
@@ -122,9 +125,10 @@ private:
     /* Linked-list of allocated DMA buffers for cleanup */
     struct DMAEntry {
         IOBufferMemoryDescriptor *desc;
-        void    *virt;
+        void    *virt;        /* kernel VA of the bounce/coherent buffer */
         IOPhysicalAddress phys;
         size_t   size;
+        void    *orig_va;     /* original CPU VA for bounce mappings (NULL=coherent) */
         DMAEntry *next;
     };
     DMAEntry *_dmaList = nullptr;
