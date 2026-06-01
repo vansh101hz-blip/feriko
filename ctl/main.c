@@ -146,6 +146,11 @@ static int cmd_list(io_connect_t conn)
         return 1;
     }
 
+    /* Debug: show raw returned length and first 32 bytes */
+    fprintf(stderr, "[dbg] IOKit returned len=%zu, first bytes:", len);
+    for (size_t i = 0; i < 32 && i < len; i++) fprintf(stderr, " %02x", buf[i]);
+    fprintf(stderr, "\n");
+
     printf("%-33s %-18s %5s %7s %s\n",
            "SSID", "BSSID", "RSSI", "Channel", "Security");
     printf("%s\n",

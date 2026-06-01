@@ -1397,11 +1397,22 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
     uint32_t written = 4; // reserve first 4 bytes for total length
 
     IOLockLock(_bssLock);
+    IOLog("rtw88: cmdGetBSSList: _bssCount=%u _bssList=%p\n",
+          _bssCount, (void *)_bssList);
     for (RTW88BSS *b = _bssList; b; b = b->next) {
         /* Each entry: ssid_len(1), ssid(ssid_len), bssid(6), rssi(2),
          *             channel(1), cipher(4) = variable */
         uint32_t entry_sz = 1 + b->ssid_len + 6 + 2 + 1 + 4;
-        if (written + entry_sz > max) break;
+        IOLog("rtw88: BSS entry: ssid_len=%u ssid='%.32s' bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+              "rssi=%d ch=%u cipher=0x%08x entry_sz=%u\n",
+              b->ssid_len, b->ssid,
+              b->bssid[0], b->bssid[1], b->bssid[2],
+              b->bssid[3], b->bssid[4], b->bssid[5],
+              (int)b->rssi, b->channel, b->cipher, entry_sz);
+        if (written + entry_sz > max) {
+            IOLog("rtw88: BSS entry skipped (buffer full: written=%u max=%u)\n", written, max);
+            break;
+        }
 
         buf[written++] = b->ssid_len;
         memcpy(buf + written, b->ssid, b->ssid_len); written += b->ssid_len;
@@ -1412,6 +1423,7 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
         memcpy(buf + written, &b->cipher, 4);          written += 4;
     }
     IOLockUnlock(_bssLock);
+    IOLog("rtw88: cmdGetBSSList: written=%u total bytes\n", written);
 
     /* Write total written bytes into the first 4 bytes */
     uint32_t total = written;
