@@ -14,6 +14,8 @@
 #   make unload       — kextunload
 #   make clean        — remove build/
 
+MAKEFLAGS += -j$(shell sysctl -n hw.logicalcpu)
+
 # ------------------------------------------------------------------ #
 # Paths                                                               #
 # ------------------------------------------------------------------ #
