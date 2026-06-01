@@ -982,6 +982,17 @@ struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy);
 static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
                                                        const struct ieee80211_ops *ops)
 {
+    /* Static fallback channel: 2.4 GHz band, CH1 (2412 MHz).
+     * rtw_rx_fill_rx_status dereferences hw->conf.chandef.chan unconditionally,
+     * so it must never be NULL — even before the driver calls ieee80211_config(). */
+    static struct ieee80211_channel s_default_chan = {
+        .band        = NL80211_BAND_2GHZ,
+        .center_freq = 2412,
+        .hw_value    = 1,
+        .flags       = 0,
+        .max_power   = 20,
+    };
+
     struct ieee80211_hw *hw = (struct ieee80211_hw *)
         kzalloc(sizeof(*hw) + priv_data_len, GFP_KERNEL);
     if (!hw) return NULL;
@@ -993,6 +1004,8 @@ static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
      * and callers reading hw->priv (offset 0) get rtwdev. */
     hw->wiphy->_dev = hw->priv;
     hw->ops = ops;
+    hw->conf.chandef.chan   = &s_default_chan;
+    hw->conf.chandef.width  = NL80211_CHAN_WIDTH_20_NOHT;
     rtw88_register_hw(hw);     /* belt: global fallback */
     return hw;
 }
