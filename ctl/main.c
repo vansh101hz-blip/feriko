@@ -132,7 +132,16 @@ static int cmd_list(io_connect_t conn)
            "-----------------------------------------------------------------------");
 
     const uint8_t *p   = buf;
-    const uint8_t *end = buf + len;
+    
+    uint32_t explicit_len = 0;
+    if (len >= 4) {
+        memcpy(&explicit_len, p, 4);
+        p += 4;
+        /* Ensure we don't read past what was actually copied back */
+        if (explicit_len > len) explicit_len = (uint32_t)len;
+    }
+
+    const uint8_t *end = buf + explicit_len;
     while (p + 1 <= end) {
         uint8_t ssid_len = *p++;
         if (p + ssid_len + 6 + 2 + 1 + 4 > end) break;

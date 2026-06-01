@@ -604,7 +604,7 @@ IOReturn RTW88IEEE80211::cmdScan()
     }
     /* Timeout: if scan doesn't complete in 10s */
     _timeoutMs = 10000;
-    _timer->setTimeoutMS(_timeoutMs);
+    _timer->setTimeout(_timeoutMs, kMillisecondScale);
     return kIOReturnSuccess;
 }
 
@@ -662,7 +662,7 @@ void RTW88IEEE80211::doAuthenticate()
     txMgmtFrame(auth, authlen);
 
     _state = RTW88_STATE_AUTHENTICATING;
-    _timer->setTimeoutMS(3000);
+    _timer->setTimeout(3000, kMillisecondScale);
 }
 
 void RTW88IEEE80211::doAssociate()
@@ -675,7 +675,7 @@ void RTW88IEEE80211::doAssociate()
     txMgmtFrame(assoc, assoclen);
 
     _state = RTW88_STATE_ASSOCIATING;
-    _timer->setTimeoutMS(3000);
+    _timer->setTimeout(3000, kMillisecondScale);
 }
 
 bool RTW88IEEE80211::buildAuthReq(uint8_t *buf, uint32_t *len)
@@ -1014,8 +1014,13 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
 {
     if (!buf || !len) return kIOReturnBadArgument;
 
-    uint32_t written = 0;
+    uint32_t written = 4; // reserve first 4 bytes for total length
     uint32_t max     = *len;
+
+    if (max < 4) {
+        *len = 0;
+        return kIOReturnNoSpace;
+    }
 
     IOLockLock(_bssLock);
     for (RTW88BSS *b = _bssList; b; b = b->next) {
@@ -1033,6 +1038,10 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
         memcpy(buf + written, &b->cipher, 4);          written += 4;
     }
     IOLockUnlock(_bssLock);
+
+    /* Write total written bytes into the first 4 bytes */
+    uint32_t total = written;
+    memcpy(buf, &total, sizeof(total));
 
     *len = written;
     return kIOReturnSuccess;
