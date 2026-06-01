@@ -356,21 +356,32 @@ irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
 
-void rtw88_trigger_interrupt(void)
+/* Work item for deferred interrupt thread_fn — queued from rtw88_trigger_interrupt */
+static struct work_struct rtw88_interrupt_work;
+
+static void rtw88_interrupt_work_fn(struct work_struct *work)
 {
-    /* Call thread_fn directly, skipping the ISR.
-     *
-     * The Linux ISR (rtw_pci_interrupt_handler) disables IMR to prevent
-     * re-entrancy, then the thread_fn re-enables it.  This creates a tight
-     * ISR → IMR-off → thread_fn → IMR-on → immediate MSI → ISR loop that
-     * hogs the IOWorkLoop and hangs macOS GUI boot.
-     *
-     * IOKit's IOInterruptEventSource + IOWorkLoop gate already serializes
-     * interrupt delivery — the handler cannot be re-entered.  We do NOT need
-     * to mask the device.  IMR stays enabled from rtw_pci_start.
-     */
+    (void)work;
+    IOLog("rtw88: interrupt work fn running\n");
     if (g_irq_thread_fn && g_irq_dev_id)
         g_irq_thread_fn(0, g_irq_dev_id);
+    else
+        IOLog("rtw88: interrupt work fn SKIP (thread_fn=%p dev_id=%p)\n",
+              (void*)g_irq_thread_fn, g_irq_dev_id);
+    IOLog("rtw88: interrupt work fn done\n");
+}
+
+void rtw88_trigger_interrupt(void)
+{
+    irqreturn_t ret = IRQ_NONE;
+    if (g_irq_handler && g_irq_dev_id) {
+        ret = g_irq_handler(0, g_irq_dev_id);
+        IOLog("rtw88: ISR returned %d\n", ret);
+    }
+    if (ret == IRQ_WAKE_THREAD && g_irq_thread_fn && g_irq_dev_id) {
+        IOLog("rtw88: scheduling interrupt work\n");
+        schedule_work(&rtw88_interrupt_work);
+    }
 }
 
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
@@ -715,11 +726,13 @@ int rtw88_compat_init(void)
     system_long_wq = alloc_workqueue("rtw88_long_wq",   0, 0);
     if (!system_wq || !system_long_wq || !rtw88_log_lock) return -ENOMEM;
 
+    INIT_WORK(&rtw88_interrupt_work, rtw88_interrupt_work_fn);
     return 0;
 }
 
 void rtw88_compat_exit(void)
 {
+    cancel_work_sync(&rtw88_interrupt_work);
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;

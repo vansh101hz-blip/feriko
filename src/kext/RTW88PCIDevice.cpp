@@ -312,7 +312,11 @@ bool RTW88PCIDevice::setupInterrupt()
 
 void RTW88PCIDevice::handleInterrupt(IOInterruptEventSource *src, int count)
 {
-    if (_ieee80211) _ieee80211->handleInterrupt();
+    /* DEBUG: ISR-only — disables IMR but does NOT schedule thread_fn */
+    if (_ieee80211) {
+        extern void rtw88_trigger_interrupt_isr_only(void);
+        rtw88_trigger_interrupt_isr_only();
+    }
 }
 
 /* ------------------------------------------------------------------ */
