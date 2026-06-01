@@ -156,15 +156,8 @@ int request_firmware_nowait(struct module *module, int uevent,
 {
     (void)module; (void)uevent; (void)device; (void)gfp;
     if (!cont) return -22;
-    IOLog("rtw88: ---- STAGE: request_firmware_nowait(%s) ----\n", name);
-    IOSleep(1500);
     struct firmware *fw = load_fw(name);
-    IOLog("rtw88: ---- STAGE: firmware load %s — calling callback ----\n",
-          fw ? "OK" : "FAILED");
-    IOSleep(1500);
     cont(fw, context);
-    IOLog("rtw88: ---- STAGE: firmware callback returned ----\n");
-    IOSleep(1500);
     return 0;
 }
 
