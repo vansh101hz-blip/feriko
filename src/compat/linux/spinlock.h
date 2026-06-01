@@ -6,40 +6,48 @@
 #include "../iokit_shim.h"
 
 /*
- * spinlock_t — backed by IOLock (a sleeping mutex) rather than IOSimpleLock.
+ * spinlock_t — backed by IORecursiveLock.
  *
- * On Linux, spin_lock_bh() acquires a spinlock and disables softirq bottom-
- * halves, but never sleeps and never disables preemption in a way that would
- * prevent other kernel threads from running.
+ * The Linux driver mixes spin_lock_bh() and spin_lock_irqsave() on the same
+ * lock (irq_lock, hwirq_lock) across callchains that re-enter the same lock on
+ * the same thread:
  *
- * Our macOS port does NOT run real interrupt handlers; the "interrupt thread"
- * (rtw_pci_interrupt_threadfn) is just a regular kernel thread invoked from
- * the IOWorkLoop.  Using IOSimpleLockLock here would:
- *   1. Disable preemption on the calling CPU.
- *   2. Block the scheduler from switching to the workqueue thread that
- *      schedule_work() just woke up inside the same lock region.
- *   => hard deadlock.
+ *   rtw_pci_interrupt_threadfn() {
+ *       spin_lock_bh(&irq_lock);           // outer acquire
+ *       rtw_pci_tx_isr() {
+ *           rtw_pci_tx_wake_queues() {
+ *               spin_lock_bh(&irq_lock);   // re-entrant acquire on same thread!
+ *               ...
+ *               spin_unlock_bh(&irq_lock);
+ *           }
+ *       }
+ *       spin_unlock_bh(&irq_lock);         // outer release
+ *   }
  *
- * IOLock is a recursive-safe, preemption-friendly mutex. It is the correct
- * primitive for our threading model.
+ * In Linux this works because spin_lock_irqsave/bh variants know their
+ * nesting context and don't deadlock within a single thread.
+ *
+ * With IOLock (non-recursive) these would deadlock. IORecursiveLock allows
+ * the same thread to acquire the same lock multiple times, matching Linux
+ * spinlock re-entrancy semantics for our single-threaded interrupt model.
  */
 typedef struct {
-    IOLock *lock;
+    IORecursiveLock *lock;
 } spinlock_t;
 
 static inline void spin_lock_init(spinlock_t *sl)
 {
-    sl->lock = IOLockAlloc();
+    sl->lock = IORecursiveLockAlloc();
 }
 
 static inline void spin_lock(spinlock_t *sl)
 {
-    IOLockLock(sl->lock);
+    IORecursiveLockLock(sl->lock);
 }
 
 static inline void spin_unlock(spinlock_t *sl)
 {
-    IOLockUnlock(sl->lock);
+    IORecursiveLockUnlock(sl->lock);
 }
 
 #define spin_lock_bh(sl)    spin_lock(sl)
@@ -50,13 +58,13 @@ static inline void spin_unlock(spinlock_t *sl)
 typedef unsigned long rtw88_irq_flags_t;
 
 #define spin_lock_irqsave(sl, flags) \
-    do { (void)(flags); IOLockLock((sl)->lock); } while (0)
+    do { (void)(flags); IORecursiveLockLock((sl)->lock); } while (0)
 
 #define spin_unlock_irqrestore(sl, flags) \
-    do { (void)(flags); IOLockUnlock((sl)->lock); } while (0)
+    do { (void)(flags); IORecursiveLockUnlock((sl)->lock); } while (0)
 
 /*
- * rwlock_t — same approach, plain IOLock.
+ * rwlock_t — plain IOLock (read/write parallelism not needed for rtw88).
  */
 typedef struct {
     IOLock *lock;
