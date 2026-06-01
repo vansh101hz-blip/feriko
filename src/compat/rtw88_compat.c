@@ -353,6 +353,9 @@ struct rtw88_hw_callbacks {
 static struct rtw88_hw_callbacks *g_hw_cbs = NULL;
 static void *g_kext_hw = NULL;
 
+/* Forward declaration — defined later in ieee80211_alloc_hw section */
+static struct ieee80211_hw *g_rtw88_hw;
+
 irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
@@ -443,12 +446,20 @@ void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
 {
     g_hw_cbs  = cbs;
     g_kext_hw = kext_hw;
+    /* Populate the kext_hw back-pointer in the hw struct so all callbacks
+     * that dereference hw->kext_hw actually reach the RTW88IEEE80211 object.
+     * Without this every callback fires with NULL and silently does nothing. */
+    if (g_rtw88_hw)
+        g_rtw88_hw->kext_hw = kext_hw;
 }
 
 void ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
+    /* Use g_kext_hw as fallback in case hw->kext_hw wasn't set yet */
+    void *ctx = hw ? hw->kext_hw : NULL;
+    if (!ctx) ctx = g_kext_hw;
     if (g_hw_cbs && g_hw_cbs->rx_frame)
-        g_hw_cbs->rx_frame(hw->kext_hw, skb);
+        g_hw_cbs->rx_frame(ctx, skb);
     else
         kfree_skb(skb);
 }
@@ -461,8 +472,10 @@ void ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 
 void ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
+    void *ctx = hw ? hw->kext_hw : NULL;
+    if (!ctx) ctx = g_kext_hw;
     if (g_hw_cbs && g_hw_cbs->tx_status)
-        g_hw_cbs->tx_status(hw->kext_hw, skb);
+        g_hw_cbs->tx_status(ctx, skb);
     else
         kfree_skb(skb);
 }
@@ -480,8 +493,10 @@ void ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb)
 void ieee80211_scan_completed(struct ieee80211_hw *hw,
                                struct cfg80211_scan_info *info)
 {
+    void *ctx = hw ? hw->kext_hw : NULL;
+    if (!ctx) ctx = g_kext_hw;
     if (g_hw_cbs && g_hw_cbs->scan_done)
-        g_hw_cbs->scan_done(hw->kext_hw, info ? info->aborted : false);
+        g_hw_cbs->scan_done(ctx, info ? info->aborted : false);
 }
 
 void ieee80211_stop_queues(struct ieee80211_hw *hw)  {}
@@ -663,8 +678,7 @@ u8 ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
     return vif ? (u8)vif->type : 0;
 }
 
-/* Single global hw pointer — set by ieee80211_alloc_hw, used by wiphy_to_ieee80211_hw.
- * Simpler and more reliable than a struct back-pointer for a single-device driver. */
+/* Single global hw pointer — forward-declared above, defined/initialized here. */
 static struct ieee80211_hw *g_rtw88_hw = NULL;
 
 void rtw88_register_hw(struct ieee80211_hw *hw) { g_rtw88_hw = hw; }
