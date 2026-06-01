@@ -992,6 +992,7 @@ static inline struct ieee80211_hw *ieee80211_alloc_hw(size_t priv_data_len,
      * wiphy_to_ieee80211_hw can return (ieee80211_hw*)wiphy
      * and callers reading hw->priv (offset 0) get rtwdev. */
     hw->wiphy->_dev = hw->priv;
+    hw->ops = ops;
     rtw88_register_hw(hw);     /* belt: global fallback */
     return hw;
 }
