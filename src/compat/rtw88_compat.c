@@ -362,17 +362,26 @@ static struct work_struct rtw88_interrupt_work;
 static void rtw88_interrupt_work_fn(struct work_struct *work)
 {
     (void)work;
+    IOLog("rtw88: interrupt work fn running\n");
     if (g_irq_thread_fn && g_irq_dev_id)
         g_irq_thread_fn(0, g_irq_dev_id);
+    else
+        IOLog("rtw88: interrupt work fn SKIP (thread_fn=%p dev_id=%p)\n",
+              (void*)g_irq_thread_fn, g_irq_dev_id);
+    IOLog("rtw88: interrupt work fn done\n");
 }
 
 void rtw88_trigger_interrupt(void)
 {
     irqreturn_t ret = IRQ_NONE;
-    if (g_irq_handler && g_irq_dev_id)
+    if (g_irq_handler && g_irq_dev_id) {
         ret = g_irq_handler(0, g_irq_dev_id);
-    if (ret == IRQ_WAKE_THREAD && g_irq_thread_fn && g_irq_dev_id)
+        IOLog("rtw88: ISR returned %d\n", ret);
+    }
+    if (ret == IRQ_WAKE_THREAD && g_irq_thread_fn && g_irq_dev_id) {
+        IOLog("rtw88: scheduling interrupt work\n");
         schedule_work(&rtw88_interrupt_work);
+    }
 }
 
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
@@ -660,7 +669,12 @@ void *devm_kmemdup_array(struct device *dev, const void *src, size_t n,
 }
 
 void devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
-{ (void)dev; (void)irq; (void)dev_id; }
+{
+    (void)dev; (void)irq; (void)dev_id;
+    g_irq_handler    = NULL;
+    g_irq_thread_fn  = NULL;
+    g_irq_dev_id     = NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Network device stubs                                                */
@@ -722,6 +736,9 @@ void rtw88_compat_exit(void)
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;
+    g_irq_handler   = NULL;
+    g_irq_thread_fn = NULL;
+    g_irq_dev_id    = NULL;
     if (rtw88_log_lock) {
         IOSimpleLockFree(rtw88_log_lock);
         rtw88_log_lock = NULL;

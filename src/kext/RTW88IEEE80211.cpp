@@ -301,12 +301,12 @@ extern "C" void rtw88_trigger_interrupt(void);
 void RTW88IEEE80211::handleInterrupt()
 {
     static int intr_cnt = 0;
-    if (intr_cnt < 10 || (intr_cnt % 1000) == 0) {
-        IOLog("rtw88: handling interrupt (count=%d)\n", intr_cnt);
-    }
+    IOLog("rtw88: handling interrupt (count=%d) ENTER\n", intr_cnt);
     intr_cnt++;
 
     rtw88_trigger_interrupt();
+
+    IOLog("rtw88: handling interrupt (count=%d) LEAVE\n", intr_cnt - 1);
 }
 
 /* ------------------------------------------------------------------ */
