@@ -472,8 +472,9 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
     for (RTW88BSS *e = _bssList; e; e = e->next) {
         if (memcmp(e->bssid, bss->bssid, 6) == 0) {
             /* Update existing */
+            RTW88BSS *saved_next = e->next;
             memcpy(e, bss, sizeof(*bss));
-            e->next = e->next; /* preserve linkage */
+            e->next = saved_next; /* preserve linkage */
             IOFree(bss, sizeof(*bss));
             IOLockUnlock(_bssLock);
             kfree_skb(skb);

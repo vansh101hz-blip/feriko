@@ -14,9 +14,13 @@
  * Dividing by 1,000,000 gives a monotonic millisecond counter sufficient
  * for the loose timeouts used by rtw88.
  */
+#include <kern/clock.h>
+
 static inline unsigned long rtw88_get_jiffies(void)
 {
-    return (unsigned long)(mach_absolute_time() / 1000000ULL);
+    uint64_t nsecs;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &nsecs);
+    return (unsigned long)(nsecs / 1000000ULL);
 }
 
 #define jiffies rtw88_get_jiffies()

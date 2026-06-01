@@ -30,7 +30,7 @@ const IOExternalMethodDispatch RTW88UserClient::sMethods[kRTW88NumSelectors] = {
       0, 0, 0, sizeof(RTW88StateResult) },
     /* kRTW88GetBSSList: output = raw bytes, max 16KB */
     { (IOExternalMethodAction)&RTW88UserClient::sGetBSSList,
-      0, 0, 0, 16 * 1024 },
+      0, 0, 0, kIOUCVariableStructureSize },
     /* kRTW88GetRSSI: output scalar */
     { (IOExternalMethodAction)&RTW88UserClient::sGetRSSI,
       0, 0, 1, 0 },
@@ -39,7 +39,7 @@ const IOExternalMethodDispatch RTW88UserClient::sMethods[kRTW88NumSelectors] = {
       1, 0, 0, 0 },
     /* kRTW88GetLog: output = log bytes */
     { (IOExternalMethodAction)&RTW88UserClient::sGetLog,
-      0, 0, 0, 4096 },
+      0, 0, 0, kIOUCVariableStructureSize },
 };
 
 /* ------------------------------------------------------------------ */
