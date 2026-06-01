@@ -6,3 +6,4 @@ firmware/*.bin
 rtw88.kext/Contents/Resources/*.bin
 rtw88.kext/Contents/MacOS/
 src/compat/fw_blobs.c
+*.log

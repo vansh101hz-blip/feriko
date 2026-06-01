@@ -42,8 +42,15 @@ static inline void *kmalloc_array(size_t n, size_t size, gfp_t flags)
     return kmalloc(n * size, flags);
 }
 
-#define kzalloc_obj(val)       kzalloc(sizeof(val), GFP_KERNEL)
-#define kzalloc_objs(val, n)   kcalloc((n), sizeof(val), GFP_KERNEL)
+#define __kzalloc_obj_1(val) kzalloc(sizeof(val), GFP_KERNEL)
+#define __kzalloc_obj_2(val, flags) kzalloc(sizeof(val), flags)
+#define __kzalloc_obj_chooser(_1, _2, NAME, ...) NAME
+#define kzalloc_obj(...) __kzalloc_obj_chooser(__VA_ARGS__, __kzalloc_obj_2, __kzalloc_obj_1)(__VA_ARGS__)
+
+#define __kmalloc_obj_1(val) kmalloc(sizeof(val), GFP_KERNEL)
+#define __kmalloc_obj_2(val, flags) kmalloc(sizeof(val), flags)
+#define __kmalloc_obj_chooser(_1, _2, NAME, ...) NAME
+#define kmalloc_obj(...) __kmalloc_obj_chooser(__VA_ARGS__, __kmalloc_obj_2, __kmalloc_obj_1)(__VA_ARGS__)
 
 static inline void kfree(const void *ptr)
 {
