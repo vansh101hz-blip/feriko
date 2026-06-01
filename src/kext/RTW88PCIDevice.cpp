@@ -15,6 +15,8 @@ extern "C" {
 #include "../compat/rtw88_compat.h"
 }
 
+extern "C" void rtw88_trigger_interrupt(void);
+
 #define super IOEthernetController
 OSDefineMetaClassAndStructors(RTW88PCIDevice, IOEthernetController)
 
@@ -312,11 +314,8 @@ bool RTW88PCIDevice::setupInterrupt()
 
 void RTW88PCIDevice::handleInterrupt(IOInterruptEventSource *src, int count)
 {
-    /* DEBUG: ISR-only — disables IMR but does NOT schedule thread_fn */
-    if (_ieee80211) {
-        extern void rtw88_trigger_interrupt_isr_only(void);
-        rtw88_trigger_interrupt_isr_only();
-    }
+    if (_ieee80211)
+        rtw88_trigger_interrupt();
 }
 
 /* ------------------------------------------------------------------ */

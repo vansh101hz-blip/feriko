@@ -4,6 +4,7 @@
 
 #include "rtw88_compat.h"
 #include <stdarg.h>
+#include <pexpert/pexpert.h>
 
 /* ------------------------------------------------------------------ */
 /*  Logging                                                             */
@@ -356,32 +357,24 @@ irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
 
-/* Work item for deferred interrupt thread_fn — queued from rtw88_trigger_interrupt */
-static struct work_struct rtw88_interrupt_work;
-
-static void rtw88_interrupt_work_fn(struct work_struct *work)
-{
-    (void)work;
-    IOLog("rtw88: interrupt work fn running\n");
-    if (g_irq_thread_fn && g_irq_dev_id)
-        g_irq_thread_fn(0, g_irq_dev_id);
-    else
-        IOLog("rtw88: interrupt work fn SKIP (thread_fn=%p dev_id=%p)\n",
-              (void*)g_irq_thread_fn, g_irq_dev_id);
-    IOLog("rtw88: interrupt work fn done\n");
-}
+/* Debug skip level for narrowing thread_fn hang.
+ * Set before calling rtw88_trigger_interrupt, or just edit this file.
+ *   5 = skip ALL (irq_recognized too) — thread_fn returns immediately
+ *   4 = only irq_recognized (read+W1C HISR)
+ *   3 = + TX completion processing
+ *   2 = + RX (NAPI schedule)
+ *   1 = + C2H
+ *   0 = + IMR re-enable (full processing)
+ */
+int rtw88_debug_interrupt_skip = 5;
 
 void rtw88_trigger_interrupt(void)
 {
-    irqreturn_t ret = IRQ_NONE;
-    if (g_irq_handler && g_irq_dev_id) {
-        ret = g_irq_handler(0, g_irq_dev_id);
-        IOLog("rtw88: ISR returned %d\n", ret);
-    }
-    if (ret == IRQ_WAKE_THREAD && g_irq_thread_fn && g_irq_dev_id) {
-        IOLog("rtw88: scheduling interrupt work\n");
-        schedule_work(&rtw88_interrupt_work);
-    }
+    if (g_irq_handler && g_irq_dev_id)
+        g_irq_handler(0, g_irq_dev_id);
+    /* skip=5 means thread_fn not called at all (identical to aff3776 baseline) */
+    if (rtw88_debug_interrupt_skip < 5 && g_irq_thread_fn && g_irq_dev_id)
+        g_irq_thread_fn(0, g_irq_dev_id);
 }
 
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
@@ -721,18 +714,20 @@ int timer_delete_sync(struct timer_list *timer)
 
 int rtw88_compat_init(void)
 {
+    int val;
+    if (PE_parse_boot_argn("rtw88_debug_skip", &val, sizeof(val)))
+        rtw88_debug_interrupt_skip = val;
+
     rtw88_log_lock = IOSimpleLockAlloc();
     system_wq      = alloc_workqueue("rtw88_system_wq", 0, 0);
     system_long_wq = alloc_workqueue("rtw88_long_wq",   0, 0);
     if (!system_wq || !system_long_wq || !rtw88_log_lock) return -ENOMEM;
 
-    INIT_WORK(&rtw88_interrupt_work, rtw88_interrupt_work_fn);
     return 0;
 }
 
 void rtw88_compat_exit(void)
 {
-    cancel_work_sync(&rtw88_interrupt_work);
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;
