@@ -455,6 +455,15 @@ IOReturn RTW88IEEE80211::start()
                 _hw->ops->add_interface(_hw, _vif);
         }
         RTW88_STAGE("add_interface done");
+
+        RTW88_STAGE("calling hw->ops->start");
+        if (_hw->ops && _hw->ops->start) {
+            int ret = _hw->ops->start(_hw);
+            RTW88_STAGE("hw->ops->start returned %d", ret);
+            if (ret != 0) {
+                IOLog("rtw88: hw->ops->start failed: %d\n", ret);
+            }
+        }
     }
 
     _state = RTW88_STATE_IDLE;
@@ -469,8 +478,13 @@ void RTW88IEEE80211::stop()
 
     if (_state == RTW88_STATE_CONNECTED) doDisconnect();
 
-    if (_vif && _hw && _hw->ops && _hw->ops->remove_interface) {
-        _hw->ops->remove_interface(_hw, _vif);
+    if (_vif && _hw && _hw->ops) {
+        if (_hw->ops->stop) {
+            _hw->ops->stop(_hw, false);
+        }
+        if (_hw->ops->remove_interface) {
+            _hw->ops->remove_interface(_hw, _vif);
+        }
         IOFree(_vif, sizeof(*_vif) + 128);
         _vif = nullptr;
     }
