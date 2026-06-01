@@ -46,6 +46,15 @@ extern int      IOLockTryLock(IOLock *lock);
 extern int      IOLockSleep(IOLock *lock, void *event, unsigned interruptible);
 extern void     IOLockWakeup(IOLock *lock, void *event, int oneThread);
 
+/* ---- IORecursiveLock (recursive/reentrant mutex) ---- */
+typedef struct IORecursiveLock IORecursiveLock;
+extern IORecursiveLock *IORecursiveLockAlloc(void);
+extern void             IORecursiveLockFree(IORecursiveLock *lock);
+extern void             IORecursiveLockLock(IORecursiveLock *lock);
+extern void             IORecursiveLockUnlock(IORecursiveLock *lock);
+extern int              IORecursiveLockTryLock(IORecursiveLock *lock);
+extern int              IORecursiveLockHaveLock(IORecursiveLock *lock);
+
 /* ---- Kernel threads ---- */
 typedef struct thread *thread_t;
 typedef int wait_result_t;
