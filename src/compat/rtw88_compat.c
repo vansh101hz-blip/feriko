@@ -653,12 +653,6 @@ struct net_device *alloc_netdev_dummy(int sizeof_priv)
 /*  Misc kernel helpers                                                  */
 /* ------------------------------------------------------------------ */
 
-void *kmalloc_obj(size_t size, gfp_t flags, const char *name)
-{ (void)name; return kmalloc(size, flags); }
-
-void *kzalloc_obj(size_t size, gfp_t flags, const char *name)
-{ (void)name; return kzalloc(size, flags); }
-
 void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask)
 {
     u8 rand[6];

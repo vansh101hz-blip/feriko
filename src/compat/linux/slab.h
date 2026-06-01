@@ -42,6 +42,9 @@ static inline void *kmalloc_array(size_t n, size_t size, gfp_t flags)
     return kmalloc(n * size, flags);
 }
 
+#define kzalloc_obj(val)       kzalloc(sizeof(val), GFP_KERNEL)
+#define kzalloc_objs(val, n)   kcalloc((n), sizeof(val), GFP_KERNEL)
+
 static inline void kfree(const void *ptr)
 {
     if (!ptr) return;
