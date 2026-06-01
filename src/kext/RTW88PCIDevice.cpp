@@ -641,6 +641,19 @@ IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
         return kIOReturnBadArgument;
     }
 
+    if (!client->attach(this)) {
+        IOLog("rtw88: RTW88UserClient::attach failed\n");
+        client->release();
+        return kIOReturnBadArgument;
+    }
+
+    if (!client->start(this)) {
+        IOLog("rtw88: RTW88UserClient::start failed\n");
+        client->detach(this);
+        client->release();
+        return kIOReturnBadArgument;
+    }
+
     IOLog("rtw88: RTW88PCIDevice::newUserClient() success\n");
     *handler = client;
     return kIOReturnSuccess;
