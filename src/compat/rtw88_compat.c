@@ -4,6 +4,7 @@
 
 #include "rtw88_compat.h"
 #include <stdarg.h>
+#include <kern/thread_call.h>
 
 /* ------------------------------------------------------------------ */
 /*  Logging                                                             */
@@ -355,16 +356,87 @@ static void *g_kext_hw = NULL;
 irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
+thread_call_t g_irq_thread_call = NULL;
+
+static void rtw88_irq_thread_wrapper(thread_call_param_t param0, thread_call_param_t param1)
+{
+    if (g_irq_thread_fn && g_irq_dev_id)
+        g_irq_thread_fn(0, g_irq_dev_id);
+}
+
+int rtw88_devm_request_threaded_irq(struct device *dev, unsigned int irq,
+        irq_handler_t handler, irq_handler_t thread_fn,
+        unsigned long flags, const char *name, void *dev_id)
+{
+    g_irq_handler = handler;
+    g_irq_thread_fn = thread_fn;
+    g_irq_dev_id = dev_id;
+    if (g_irq_thread_call == NULL) {
+        g_irq_thread_call = thread_call_allocate((thread_call_func_t)rtw88_irq_thread_wrapper, NULL);
+    }
+    return 0;
+}
+
+void rtw88_devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
+{
+    if (g_irq_thread_call) {
+        thread_call_cancel(g_irq_thread_call);
+        thread_call_free(g_irq_thread_call);
+        g_irq_thread_call = NULL;
+    }
+    g_irq_handler = NULL;
+    g_irq_thread_fn = NULL;
+    g_irq_dev_id = NULL;
+}
 
 void rtw88_trigger_interrupt(void)
 {
-    /* ISR disables IMR once — prevents interrupt storm on boot.
-     * thread_fn processes events but does NOT re-enable IMR
-     * (IMR re-enable was the root cause of the boot hang). */
-    if (g_irq_handler && g_irq_dev_id)
-        g_irq_handler(0, g_irq_dev_id);
-    if (g_irq_thread_fn && g_irq_dev_id)
-        g_irq_thread_fn(0, g_irq_dev_id);
+    if (g_irq_handler && g_irq_dev_id) {
+        int ret = g_irq_handler(0, g_irq_dev_id);
+        if (ret == IRQ_WAKE_THREAD && g_irq_thread_call) {
+            thread_call_enter(g_irq_thread_call);
+        }
+    }
+}
+
+static void rtw88_napi_thread_wrapper(thread_call_param_t param0, thread_call_param_t param1)
+{
+    struct napi_struct *napi = (struct napi_struct *)param0;
+    if (napi && napi->poll) {
+        int work = napi->poll(napi, napi->weight);
+        if (work >= napi->weight) {
+            if (napi->thread_call) {
+                thread_call_enter((thread_call_t)napi->thread_call);
+            }
+        }
+    }
+}
+
+void rtw88_netif_napi_add(struct net_device *dev, struct napi_struct *napi, int (*poll_fn)(struct napi_struct *, int))
+{
+    napi->dev = dev;
+    napi->poll = poll_fn;
+    napi->weight = 64;
+    napi->running = 0;
+    if (napi->thread_call == NULL) {
+        napi->thread_call = (void *)thread_call_allocate((thread_call_func_t)rtw88_napi_thread_wrapper, (thread_call_param_t)napi);
+    }
+}
+
+void rtw88_netif_napi_del(struct napi_struct *napi)
+{
+    if (napi->thread_call) {
+        thread_call_cancel((thread_call_t)napi->thread_call);
+        thread_call_free((thread_call_t)napi->thread_call);
+        napi->thread_call = NULL;
+    }
+}
+
+void rtw88_napi_schedule(struct napi_struct *napi)
+{
+    if (napi && napi->thread_call) {
+        thread_call_enter((thread_call_t)napi->thread_call);
+    }
 }
 
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
@@ -651,13 +723,7 @@ void *devm_kmemdup_array(struct device *dev, const void *src, size_t n,
     return p;
 }
 
-void devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
-{
-    (void)dev; (void)irq; (void)dev_id;
-    g_irq_handler    = NULL;
-    g_irq_thread_fn  = NULL;
-    g_irq_dev_id     = NULL;
-}
+// removed devm_free_irq to avoid redefinition
 
 /* ------------------------------------------------------------------ */
 /*  Network device stubs                                                */
@@ -731,6 +797,17 @@ void rtw88_compat_exit(void)
 /* ------------------------------------------------------------------ */
 
 #include "main.h"
+
+extern void rtw_pci_enable_interrupt(struct rtw_dev *rtwdev, struct rtw_pci *rtwpci, bool exclude_rx);
+
+void rtw88_reenable_interrupt(void)
+{
+    if (g_irq_dev_id) {
+        struct rtw_dev *rtwdev = (struct rtw_dev *)g_irq_dev_id;
+        struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
+        rtw_pci_enable_interrupt(rtwdev, rtwpci, false);
+    }
+}
 
 void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version)
 {

@@ -16,6 +16,7 @@ extern "C" {
 }
 
 extern "C" void rtw88_trigger_interrupt(void);
+extern "C" boolean_t preemption_enabled(void);
 
 #define super IOEthernetController
 OSDefineMetaClassAndStructors(RTW88PCIDevice, IOEthernetController)
@@ -309,6 +310,7 @@ bool RTW88PCIDevice::setupInterrupt()
         return false;
     }
     _workLoop->addEventSource(_intrSrc);
+
     return true;
 }
 
@@ -552,8 +554,10 @@ void RTW88PCIDevice::freeCoherent(size_t size, void *virt, IOPhysicalAddress phy
         if (e->virt == virt) {
             *prev = e->next;
             IOSimpleLockUnlock(_dmaLock);
-            e->desc->complete();
-            e->desc->release();
+            if (preemption_enabled()) {
+                e->desc->complete();
+                e->desc->release();
+            }
             IOFree(e, sizeof(*e));
             return;
         }
@@ -571,8 +575,10 @@ void RTW88PCIDevice::freeCoherentByPhys(IOPhysicalAddress phys)
         if (e->phys == phys) {
             *prev = e->next;
             IOSimpleLockUnlock(_dmaLock);
-            e->desc->complete();
-            e->desc->release();
+            if (preemption_enabled()) {
+                e->desc->complete();
+                e->desc->release();
+            }
             IOFree(e, sizeof(*e));
             return;
         }

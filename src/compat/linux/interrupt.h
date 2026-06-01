@@ -34,6 +34,9 @@ static inline int request_irq(unsigned int irq,
 
 static inline void free_irq(unsigned int irq, void *dev_id) {}
 
+void rtw88_devm_free_irq(struct device *dev, unsigned int irq, void *dev_id);
+#define devm_free_irq rtw88_devm_free_irq
+
 static inline void enable_irq(unsigned int irq) {}
 static inline void disable_irq(unsigned int irq) {}
 static inline void disable_irq_nosync(unsigned int irq) {}
@@ -67,36 +70,34 @@ struct napi_struct {
     int (*poll)(struct napi_struct *, int);
     int weight;
     int running;
+    void *thread_call;
 };
 
-#define netif_napi_add(dev, napi_ptr, poll_fn) do { \
-    (napi_ptr)->poll = (poll_fn); \
-    (napi_ptr)->weight = 64; \
-} while (0)
+void rtw88_netif_napi_add(struct net_device *dev, struct napi_struct *napi, int (*poll_fn)(struct napi_struct *, int));
+#define netif_napi_add rtw88_netif_napi_add
 
 static inline void napi_enable(struct napi_struct *napi) {}
 static inline void napi_disable(struct napi_struct *napi) {}
-static inline void napi_schedule(struct napi_struct *napi) {
-    if (napi && napi->poll) napi->poll(napi, 64);
-}
+
+void rtw88_napi_schedule(struct napi_struct *napi);
+#define napi_schedule rtw88_napi_schedule
+
 static inline void napi_complete(struct napi_struct *napi) {}
 static inline int napi_reschedule(struct napi_struct *napi) { return 0; }
 static inline void napi_synchronize(struct napi_struct *napi) {}
-static inline void netif_napi_del(struct napi_struct *napi) {}
+
+void rtw88_netif_napi_del(struct napi_struct *napi);
+#define netif_napi_del rtw88_netif_napi_del
+
 static inline int napi_complete_done(struct napi_struct *napi, int work) { return 1; }
 
 extern irq_handler_t g_irq_handler;
 extern irq_handler_t g_irq_thread_fn;
 extern void *g_irq_dev_id;
 
-static inline int devm_request_threaded_irq(struct device *dev, unsigned int irq,
+int rtw88_devm_request_threaded_irq(struct device *dev, unsigned int irq,
         irq_handler_t handler, irq_handler_t thread_fn,
-        unsigned long flags, const char *name, void *dev_id)
-{
-    g_irq_handler = handler;
-    g_irq_thread_fn = thread_fn;
-    g_irq_dev_id = dev_id;
-    return 0;
-}
+        unsigned long flags, const char *name, void *dev_id);
+#define devm_request_threaded_irq rtw88_devm_request_threaded_irq
 
 #endif /* _RTW88_COMPAT_INTERRUPT_H */

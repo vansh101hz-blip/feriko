@@ -70,17 +70,7 @@ extern thread_t      current_thread(void);
 extern void          thread_terminate(thread_t thread);
 
 /* ---- thread_call (deferred one-shot work, used for timers) ---- */
-typedef struct thread_call *thread_call_t;
-typedef void *thread_call_param_t;
-typedef void (*thread_call_func_t)(thread_call_param_t param0,
-                                    thread_call_param_t param1);
-extern thread_call_t thread_call_allocate(thread_call_func_t func,
-                                           thread_call_param_t param);
-extern void          thread_call_free(thread_call_t call);
-extern int           thread_call_enter_delayed(thread_call_t call, uint64_t deadline);
-extern int           thread_call_cancel(thread_call_t call);
-/* thread_call_cancel_wait not exported by macOS 15+ KPIs; defined in rtw88_compat.c */
-int thread_call_cancel_wait(thread_call_t call);
+#include <kern/thread_call.h>
 
 #else /* KERNEL defined — use real XNU types from MacKernelSDK */
 
