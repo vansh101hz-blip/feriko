@@ -4,7 +4,6 @@
 
 #include "rtw88_compat.h"
 #include <stdarg.h>
-#include <pexpert/pexpert.h>
 
 /* ------------------------------------------------------------------ */
 /*  Logging                                                             */
@@ -357,23 +356,14 @@ irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
 
-/* Debug skip level for narrowing thread_fn hang.
- * Set before calling rtw88_trigger_interrupt, or just edit this file.
- *   5 = skip ALL (irq_recognized too) — thread_fn returns immediately
- *   4 = only irq_recognized (read+W1C HISR)
- *   3 = + TX completion processing
- *   2 = + RX (NAPI schedule)
- *   1 = + C2H
- *   0 = + IMR re-enable (full processing)
- */
-int rtw88_debug_interrupt_skip = 5;
-
 void rtw88_trigger_interrupt(void)
 {
+    /* ISR disables IMR once — prevents interrupt storm on boot.
+     * thread_fn processes events but does NOT re-enable IMR
+     * (IMR re-enable was the root cause of the boot hang). */
     if (g_irq_handler && g_irq_dev_id)
         g_irq_handler(0, g_irq_dev_id);
-    /* skip=5 means thread_fn not called at all (identical to aff3776 baseline) */
-    if (rtw88_debug_interrupt_skip < 5 && g_irq_thread_fn && g_irq_dev_id)
+    if (g_irq_thread_fn && g_irq_dev_id)
         g_irq_thread_fn(0, g_irq_dev_id);
 }
 
@@ -714,10 +704,6 @@ int timer_delete_sync(struct timer_list *timer)
 
 int rtw88_compat_init(void)
 {
-    int val;
-    if (PE_parse_boot_argn("rtw88_debug_skip", &val, sizeof(val)))
-        rtw88_debug_interrupt_skip = val;
-
     rtw88_log_lock = IOSimpleLockAlloc();
     system_wq      = alloc_workqueue("rtw88_system_wq", 0, 0);
     system_long_wq = alloc_workqueue("rtw88_long_wq",   0, 0);
