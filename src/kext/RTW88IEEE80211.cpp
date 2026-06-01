@@ -1212,22 +1212,31 @@ void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
 
     uint8_t *key = eapol + 4;
     key[0] = 2;  /* key descriptor = RSN */
-    uint16_t ki = 0x010A; /* pairwise, HMAC-SHA1 */
-    if (mic)     ki |= 0x0100;
-    if (install) ki |= 0x0040;
-    if (ack)     ki |= 0x0080;
-    if (step == 4) ki |= 0x2000; /* Secure */
+    uint16_t ki = 0x000A; /* version=2 (HMAC-SHA1/AES), pairwise */
+    if (mic)     ki |= 0x0100; /* MIC */
+    if (install) ki |= 0x0040; /* Install */
+    if (ack)     ki |= 0x0080; /* ACK */
+    if (step == 4) ki |= 0x0200; /* Secure (bit 9) */
     key[1] = (uint8_t)(ki >> 8);
     key[2] = (uint8_t)(ki & 0xff);
-    key[3] = 0; key[4] = 16; /* key length = 16 (AES) */
-    memcpy(key + 5, replay_counter, 8);
-    memcpy(key + 13, _snonce, 32); /* SNonce */
-    /* MIC field at key+77 — compute later; zero for now */
-    key[45] = 0; key[46] = 0; /* key data length */
+    key[3] = 0; key[4] = 16; /* key length = 16 (AES-128) */
+    memcpy(key + 5, replay_counter, 8);  /* key[5..12]  = Replay Counter */
+    memcpy(key + 13, _snonce, 32);       /* key[13..44] = SNonce */
+    /* key[45..60] = Key IV (zeros), key[61..68] = RSC (zeros) */
+    /* key[69..76] = Reserved (zeros), key[77..92] = MIC (below) */
+    /* key[93..94] = Key Data Length = 0 (zeros) */
+
+    if (mic) {
+        /* MIC = first 16 bytes of HMAC-SHA1(KCK, EAPOL frame with MIC zeroed)
+         * KCK = _ptk[0..15]; EAPOL frame starts at eapol[0], length = 4+95 = 99 */
+        uint8_t mic_buf[20];
+        kern_hmac_sha1(_ptk, 16, eapol, 4 + 95, mic_buf);
+        memcpy(key + 77, mic_buf, 16);
+    }
 
     /* Transmit as 802.11 data frame */
     mbuf_t m = nullptr;
-    uint32_t ethlen = 14 + 4 + 99;
+    uint32_t ethlen = 14 + 4 + 95; /* eth(14) + EAPOL header(4) + EAPOL-Key body(95) */
     if (mbuf_allocpacket(MBUF_WAITOK, ethlen, nullptr, &m) != 0) return;
     mbuf_setlen(m, ethlen);
     mbuf_pkthdr_setlen(m, ethlen);
