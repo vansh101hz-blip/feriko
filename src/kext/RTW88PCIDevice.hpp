@@ -89,7 +89,7 @@ public:
     RTW88IEEE80211 *get80211() { return _ieee80211; }
 
     /* WorkLoop and CmdGate accessors for C compat shims */
-    IOWorkLoop *getWorkLoop() const { return _workLoop; }
+    IOWorkLoop *getMyWorkLoop() const { return _workLoop; }
     IOCommandGate *getCmdGate() const { return _cmdGate; }
 
     /* MMIO base — used by compat ioremap shim */

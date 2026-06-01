@@ -97,8 +97,8 @@ static struct pci_ops_rtw88 _pci_io_ops = {
 extern "C" {
 bool rtw88_workloop_in_gate(void)
 {
-    if (!g_pci_dev_instance || !g_pci_dev_instance->getWorkLoop()) return false;
-    return g_pci_dev_instance->getWorkLoop()->inGate();
+    if (!g_pci_dev_instance || !g_pci_dev_instance->getMyWorkLoop()) return false;
+    return g_pci_dev_instance->getMyWorkLoop()->inGate();
 }
 
 unsigned long rtw88_workloop_sleep_timeout(void *event, unsigned long timeout_ms)
