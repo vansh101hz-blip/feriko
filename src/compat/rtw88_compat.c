@@ -356,12 +356,23 @@ irq_handler_t g_irq_handler = NULL;
 irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
 
-void rtw88_trigger_interrupt(void)
+/* Work item for deferred interrupt thread_fn — queued from rtw88_trigger_interrupt */
+static struct work_struct rtw88_interrupt_work;
+
+static void rtw88_interrupt_work_fn(struct work_struct *work)
 {
-    if (g_irq_handler && g_irq_dev_id)
-        g_irq_handler(0, g_irq_dev_id);
+    (void)work;
     if (g_irq_thread_fn && g_irq_dev_id)
         g_irq_thread_fn(0, g_irq_dev_id);
+}
+
+void rtw88_trigger_interrupt(void)
+{
+    irqreturn_t ret = IRQ_NONE;
+    if (g_irq_handler && g_irq_dev_id)
+        ret = g_irq_handler(0, g_irq_dev_id);
+    if (ret == IRQ_WAKE_THREAD && g_irq_thread_fn && g_irq_dev_id)
+        schedule_work(&rtw88_interrupt_work);
 }
 
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw)
@@ -700,11 +711,14 @@ int rtw88_compat_init(void)
     system_wq      = alloc_workqueue("rtw88_system_wq", 0, 0);
     system_long_wq = alloc_workqueue("rtw88_long_wq",   0, 0);
     if (!system_wq || !system_long_wq || !rtw88_log_lock) return -ENOMEM;
+
+    INIT_WORK(&rtw88_interrupt_work, rtw88_interrupt_work_fn);
     return 0;
 }
 
 void rtw88_compat_exit(void)
 {
+    cancel_work_sync(&rtw88_interrupt_work);
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;

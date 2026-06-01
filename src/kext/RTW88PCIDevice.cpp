@@ -94,33 +94,7 @@ static struct pci_ops_rtw88 _pci_io_ops = {
     .pci_find_capability = compat_pci_find_capability,
 };
 
-extern "C" {
-bool rtw88_workloop_in_gate(void)
-{
-    if (!g_pci_dev_instance || !g_pci_dev_instance->getMyWorkLoop()) return false;
-    return g_pci_dev_instance->getMyWorkLoop()->inGate();
-}
 
-unsigned long rtw88_workloop_sleep_timeout(void *event, unsigned long timeout_ms)
-{
-    if (!g_pci_dev_instance || !g_pci_dev_instance->getCmdGate()) return 0;
-    
-    AbsoluteTime deadline;
-    clock_interval_to_deadline(timeout_ms, kMillisecondScale, &deadline);
-    
-    IOReturn ret = g_pci_dev_instance->getCmdGate()->commandSleep(event, deadline, THREAD_UNINT);
-    if (ret == THREAD_TIMED_OUT) return 0;
-    
-    /* Return a fake non-zero remaining time since we don't calculate exact remaining */
-    return timeout_ms / 2;
-}
-
-void rtw88_workloop_wakeup(void *event)
-{
-    if (!g_pci_dev_instance || !g_pci_dev_instance->getCmdGate()) return;
-    g_pci_dev_instance->getCmdGate()->commandWakeup(event, false);
-}
-}
 
 /* DMA ops shim */
 static void *compat_dma_alloc(struct device *dev, size_t size,
