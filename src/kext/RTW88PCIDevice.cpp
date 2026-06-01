@@ -247,6 +247,7 @@ bool RTW88PCIDevice::start(IOService *provider)
     if (!attachDevice()) return false;
 
     _initialized = true;
+    if (_intrSrc) _intrSrc->enable();
     IOLog("rtw88: device started successfully\n");
     registerService();   /* publish IOKit port for IOServiceOpen / rtw88ctl */
     return true;
@@ -304,7 +305,6 @@ bool RTW88PCIDevice::setupInterrupt()
         return false;
     }
     _workLoop->addEventSource(_intrSrc);
-    _intrSrc->enable();
     return true;
 }
 
