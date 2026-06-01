@@ -823,6 +823,13 @@ void rtw88_reenable_interrupt(void)
     }
 }
 
+bool rtw88_is_scanning(void)
+{
+    if (!g_rtw88_hw || !g_rtw88_hw->priv) return false;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)g_rtw88_hw->priv;
+    return test_bit(RTW_FLAG_SCANNING, rtwdev->flags);
+}
+
 void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version)
 {
     if (version) *version = 0;

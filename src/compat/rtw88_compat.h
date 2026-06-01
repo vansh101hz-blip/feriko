@@ -154,4 +154,8 @@ uint32_t rtw88_read_log(char *out_buf, uint32_t max_len);
 
 void rtw88_reenable_interrupt(void);
 
+/* Returns true while the driver's RTW_FLAG_SCANNING bit is set.
+ * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
+bool rtw88_is_scanning(void);
+
 #endif /* _RTW88_COMPAT_H */

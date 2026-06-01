@@ -333,6 +333,9 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
     _bssLock = IOLockAlloc();
     if (!_lock || !_bssLock) return false;
 
+    _connectTC = thread_call_allocate((thread_call_func_t)RTW88IEEE80211::connectTCFn,
+                                       (thread_call_param_t)this);
+
     /* Install callbacks into compat layer */
     static struct rtw88_hw_callbacks cbs = {
         .rx_frame  = RTW88IEEE80211::compat_rx_frame,
@@ -360,6 +363,7 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
 
 void RTW88IEEE80211::free()
 {
+    if (_connectTC) { thread_call_cancel(_connectTC); thread_call_free(_connectTC); _connectTC = nullptr; }
     if (_timer)  { _wl->removeEventSource(_timer); _timer->release();  _timer = nullptr; }
     if (_gate)   { _wl->removeEventSource(_gate);  _gate->release();   _gate = nullptr; }
     if (_wl)     { _wl->release();   _wl = nullptr; }
@@ -898,23 +902,42 @@ IOReturn RTW88IEEE80211::cmdConnect(const char *ssid, const char *password)
 
     strlcpy(_password, password ? password : "", sizeof(_password));
     _wpa2 = (_targetBSS.cipher == WLAN_CIPHER_SUITE_CCMP);
+    _state = RTW88_STATE_AUTHENTICATING;
 
-    doAuthenticate();
+    /* Run doAuthenticate on a background thread_call so the IOUserClient
+     * call returns immediately.  The connect machinery (channel change,
+     * mutex acquisition, TX) must not block the MIG thread. */
+    if (_connectTC)
+        thread_call_enter(_connectTC);
     return kIOReturnSuccess;
+}
+
+void RTW88IEEE80211::connectTCFn(thread_call_param_t self, thread_call_param_t)
+{
+    ((RTW88IEEE80211 *)self)->doAuthenticate();
 }
 
 void RTW88IEEE80211::doAuthenticate()
 {
     if (!_hw || !_vif) return;
 
-    IOLog("rtw88: authenticating to BSSID %02x:%02x:%02x:%02x:%02x:%02x ch=%u\n",
+    IOLog("rtw88: doAuthenticate BSSID %02x:%02x:%02x:%02x:%02x:%02x ch=%u\n",
           _targetBSS.bssid[0], _targetBSS.bssid[1], _targetBSS.bssid[2],
           _targetBSS.bssid[3], _targetBSS.bssid[4], _targetBSS.bssid[5],
           _targetBSS.channel);
 
+    /* Wait for post-scan MMIO cleanup (rtw_hw_scan_complete via c2h_work).
+     * That workqueue task holds rtwdev->mutex while doing MMIO writes; if we
+     * race it, the channel-change writes can hang the PCIe bus.
+     * RTW_FLAG_SCANNING is cleared at the very end of that sequence. */
+    for (int i = 0; i < 50; i++) {
+        if (!rtw88_is_scanning()) break;
+        IOSleep(100);
+    }
+    IOLog("rtw88: doAuthenticate: scan flag clear, proceeding\n");
+
     /* ----- 1. Tune hardware to target channel ----- */
     if (_hw->ops && _hw->ops->config) {
-        /* Find the ieee80211_channel object for the target channel */
         struct ieee80211_channel *chan = nullptr;
         for (int b = 0; b < NL80211_NUM_BANDS && !chan; b++) {
             struct ieee80211_supported_band *band = _hw->wiphy ? _hw->wiphy->bands[b] : nullptr;
@@ -929,17 +952,16 @@ void RTW88IEEE80211::doAuthenticate()
         if (chan) {
             _hw->conf.chandef.chan  = chan;
             _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
-            /* Only request channel change — chip is already awake after scan.
-             * Passing IEEE80211_CONF_CHANGE_IDLE triggers rtw_leave_ips →
-             * rtw_power_on which re-downloads firmware to an active chip,
-             * resetting its state and hanging the PCIe bus. */
+            IOLog("rtw88: doAuthenticate: calling config channel=%u\n", _targetBSS.channel);
             _hw->ops->config(_hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
+            IOLog("rtw88: doAuthenticate: config done\n");
         } else {
-            IOLog("rtw88: could not find channel %u in band tables\n", _targetBSS.channel);
+            IOLog("rtw88: doAuthenticate: channel %u not in band table\n", _targetBSS.channel);
         }
     }
 
-    /* ----- 2. Configure BSS parameters (BSSID) ----- */
+    /* ----- 2. Configure BSSID ----- */
+    IOLog("rtw88: doAuthenticate: setting BSSID\n");
     struct ieee80211_bss_conf *bss = &_vif->bss_conf;
     bss->bssid = bss->bssid_buf;
     memcpy(bss->bssid_buf, _targetBSS.bssid, 6);
@@ -947,12 +969,15 @@ void RTW88IEEE80211::doAuthenticate()
     bss->aid    = 0;
     if (_hw->ops && _hw->ops->bss_info_changed)
         _hw->ops->bss_info_changed(_hw, _vif, bss, BSS_CHANGED_BSSID);
+    IOLog("rtw88: doAuthenticate: BSSID set\n");
 
     /* ----- 3. Send Authentication frame ----- */
+    IOLog("rtw88: doAuthenticate: sending auth frame\n");
     uint8_t auth[30] = {};
     uint32_t authlen = 0;
     buildAuthReq(auth, &authlen);
     txMgmtFrame(auth, authlen);
+    IOLog("rtw88: doAuthenticate: auth frame sent\n");
 
     _state = RTW88_STATE_AUTHENTICATING;
     uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d); _timer->wakeAtTime(d);

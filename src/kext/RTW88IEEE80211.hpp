@@ -16,6 +16,7 @@
 #include <IOKit/IOLocks.h>
 #include <sys/mbuf.h>
 #include <net/ethernet.h>
+#include <kern/thread_call.h>
 
 /* Opaque C driver handle */
 struct rtw_dev;
@@ -128,6 +129,10 @@ private:
     /* Timer callback for state machine timeouts */
     static void timerFired(OSObject *owner, IOTimerEventSource *timer);
     void        onTimer();
+
+    /* Connect thread_call — runs doAuthenticate off the IOUserClient thread */
+    static void connectTCFn(thread_call_param_t self, thread_call_param_t);
+    thread_call_t _connectTC = nullptr;
 
     /* ---------------------------------------------------------------- */
     RTW88PCIDevice    *_parent        = nullptr;
