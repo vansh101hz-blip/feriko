@@ -98,6 +98,7 @@ private:
     void      processRxMgmt(struct sk_buff *skb);
     void      processRxData(struct sk_buff *skb);
     void      processScanResult(struct sk_buff *skb);
+    void      processAssocResponse(struct sk_buff *skb);
 
     void      doAuthenticate();
     void      doAssociate();
@@ -165,7 +166,11 @@ private:
 
     /* Sequence number for TX frames */
     uint16_t _txSeq    = 0;
+    uint16_t _assocAID = 0;
 
     /* RSSI tracking */
     int      _rssi     = -100;
+
+    /* Diagnostics: periodic logging of RX activity during scan */
+    uint32_t _rxFrameCount = 0;
 };

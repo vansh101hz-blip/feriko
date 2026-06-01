@@ -11,12 +11,8 @@
 #include <string.h>
 #include <sys/random.h>
 
-/* Debug stage checkpoint — logs message and pauses so verbose output
- * is readable before the next stage runs or a panic occurs. */
-#define RTW88_STAGE(fmt, ...) do { \
-    IOLog("rtw88: ---- STAGE: " fmt " ----\n", ##__VA_ARGS__); \
-    IOSleep(1500); \
-} while (0)
+/* Debug stage checkpoint — logs message only (no sleep). */
+#define RTW88_STAGE(fmt, ...) IOLog("rtw88: ---- STAGE: " fmt " ----\n", ##__VA_ARGS__)
 
 extern "C" {
 #include "../compat/rtw88_compat.h"
@@ -36,17 +32,233 @@ void rtw_pci_remove(struct pci_dev *pdev);
 /* Exported from the compat layer for hooking */
 void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw);
 
-/* Use rtw88_get_hw() to retrieve the registered ieee80211_hw pointer.
- * Do NOT add 'extern struct ieee80211_hw *g_rtw88_hw' here — g_rtw88_hw has
- * static linkage in rtw88_compat.c; a direct extern declaration is UB and
- * resolves to a garbage address at run time, causing a kernel panic. */
-
 /* chip hw_spec structs — driver_data for rtw_pci_probe */
 extern const struct rtw_chip_info rtw8822b_hw_spec;
 extern const struct rtw_chip_info rtw8822c_hw_spec;
 extern const struct rtw_chip_info rtw8821c_hw_spec;
 extern const struct rtw_chip_info rtw8814a_hw_spec;
+
 } /* extern "C" */
+
+/* ------------------------------------------------------------------ */
+/*  WPA2 cryptographic functions (SHA1, HMAC-SHA1, PBKDF2, PRF)      */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint32_t state[5];
+    uint32_t count[2];
+    uint8_t buffer[64];
+} KERN_SHA1_CTX;
+
+#define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
+
+#define blk0(i) (block->l[i] = (rol(block->l[i], 24) & 0xFF00FF00) | (rol(block->l[i], 8) & 0x00FF00FF))
+#define blk(i) (block->l[i & 15] = rol(block->l[(i + 13) & 15] ^ block->l[(i + 8) & 15] ^ block->l[(i + 2) & 15] ^ block->l[i & 15], 1))
+
+#define r0(v,w,x,y,z,i) z += ((w & (x ^ y)) ^ y) + blk0(i) + 0x5A827999 + rol(v, 5); w = rol(w, 30);
+#define r1(v,w,x,y,z,i) z += ((w & (x ^ y)) ^ y) + blk(i) + 0x5A827999 + rol(v, 5); w = rol(w, 30);
+#define r2(v,w,x,y,z,i) z += (w ^ x ^ y) + blk(i) + 0x6ED9EBA1 + rol(v, 5); w = rol(w, 30);
+#define r3(v,w,x,y,z,i) z += (((w | x) & y) | (w & x)) + blk(i) + 0x8F1BBCDC + rol(v, 5); w = rol(w, 30);
+#define r4(v,w,x,y,z,i) z += (w ^ x ^ y) + blk(i) + 0xCA62C1D6 + rol(v, 5); w = rol(w, 30);
+
+static void kern_sha1_transform(uint32_t state[5], const uint8_t buffer[64]) {
+    uint32_t a, b, c, d, e;
+    typedef union {
+        uint8_t c[64];
+        uint32_t l[16];
+    } CHAR64LONG16;
+    CHAR64LONG16 block[1];
+    memcpy(block, buffer, 64);
+    a = state[0]; b = state[1]; c = state[2]; d = state[3]; e = state[4];
+    r0(a,b,c,d,e,0);  r0(e,a,b,c,d,1);  r0(d,e,a,b,c,2);  r0(c,d,e,a,b,3);
+    r0(b,c,d,e,a,4);  r0(a,b,c,d,e,5);  r0(e,a,b,c,d,6);  r0(d,e,a,b,c,7);
+    r0(c,d,e,a,b,8);  r0(b,c,d,e,a,9);  r0(a,b,c,d,e,10); r0(e,a,b,c,d,11);
+    r0(d,e,a,b,c,12); r0(c,d,e,a,b,13); r0(b,c,d,e,a,14); r0(a,b,c,d,e,15);
+    r1(e,a,b,c,d,16); r1(d,e,a,b,c,17); r1(c,d,e,a,b,18); r1(b,c,d,e,a,19);
+    r2(a,b,c,d,e,20); r2(e,a,b,c,d,21); r2(d,e,a,b,c,22); r2(c,d,e,a,b,23);
+    r2(b,c,d,e,a,24); r2(a,b,c,d,e,25); r2(e,a,b,c,d,26); r2(d,e,a,b,c,27);
+    r2(c,d,e,a,b,28); r2(b,c,d,e,a,29); r2(a,b,c,d,e,30); r2(e,a,b,c,d,31);
+    r2(d,e,a,b,c,32); r2(c,d,e,a,b,33); r2(b,c,d,e,a,34); r2(a,b,c,d,e,35);
+    r2(e,a,b,c,d,36); r2(d,e,a,b,c,37); r2(c,d,e,a,b,38); r2(b,c,d,e,a,39);
+    r3(a,b,c,d,e,40); r3(e,a,b,c,d,41); r3(d,e,a,b,c,42); r3(c,d,e,a,b,43);
+    r3(b,c,d,e,a,44); r3(a,b,c,d,e,45); r3(e,a,b,c,d,46); r3(d,e,a,b,c,47);
+    r3(c,d,e,a,b,48); r3(b,c,d,e,a,49); r3(a,b,c,d,e,50); r3(e,a,b,c,d,51);
+    r3(d,e,a,b,c,52); r3(c,d,e,a,b,53); r3(b,c,d,e,a,54); r3(a,b,c,d,e,55);
+    r3(e,a,b,c,d,56); r3(d,e,a,b,c,57); r3(c,d,e,a,b,58); r3(b,c,d,e,a,59);
+    r4(a,b,c,d,e,60); r4(e,a,b,c,d,61); r4(d,e,a,b,c,62); r4(c,d,e,a,b,63);
+    r4(b,c,d,e,a,64); r4(a,b,c,d,e,65); r4(e,a,b,c,d,66); r4(d,e,a,b,c,67);
+    r4(c,d,e,a,b,68); r4(b,c,d,e,a,69); r4(a,b,c,d,e,70); r4(e,a,b,c,d,71);
+    r4(d,e,a,b,c,72); r4(c,d,e,a,b,73); r4(b,c,d,e,a,74); r4(a,b,c,d,e,75);
+    r4(e,a,b,c,d,76); r4(d,e,a,b,c,77); r4(c,d,e,a,b,78); r4(b,c,d,e,a,79);
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d; state[4] += e;
+}
+
+static void kern_sha1_init(KERN_SHA1_CTX *context) {
+    context->state[0] = 0x67452301;
+    context->state[1] = 0xEFCDAB89;
+    context->state[2] = 0x98BADCFE;
+    context->state[3] = 0x10325476;
+    context->state[4] = 0xC3D2E1F0;
+    context->count[0] = context->count[1] = 0;
+}
+
+static void kern_sha1_update(KERN_SHA1_CTX *context, const uint8_t *data, uint32_t len) {
+    uint32_t i, j;
+    j = context->count[0];
+    if ((context->count[0] += len << 3) < j)
+        context->count[1]++;
+    context->count[1] += (len >> 29);
+    j = (j >> 3) & 63;
+    if ((j + len) > 63) {
+        memcpy(&context->buffer[j], data, (i = 64 - j));
+        kern_sha1_transform(context->state, context->buffer);
+        for (; i + 63 < len; i += 64) {
+            kern_sha1_transform(context->state, &data[i]);
+        }
+        j = 0;
+    } else {
+        i = 0;
+    }
+    memcpy(&context->buffer[j], &data[i], len - i);
+}
+
+static void kern_sha1_final(uint8_t digest[20], KERN_SHA1_CTX *context) {
+    unsigned char finalcount[8];
+    for (int i = 0; i < 8; i++) {
+        finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)] >> ((3 - (i & 3)) * 8)) & 255);
+    }
+    unsigned char c = 0200;
+    kern_sha1_update(context, &c, 1);
+    while ((context->count[0] & 504) != 448) {
+        c = 0;
+        kern_sha1_update(context, &c, 1);
+    }
+    kern_sha1_update(context, finalcount, 8);
+    for (int i = 0; i < 20; i++) {
+        digest[i] = (uint8_t)((context->state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
+    }
+}
+
+static void kern_hmac_sha1(const uint8_t *key, size_t key_len,
+                           const uint8_t *data, size_t data_len,
+                           uint8_t mac[20])
+{
+    KERN_SHA1_CTX ctx;
+    uint8_t k_ipad[64] = {};
+    uint8_t k_opad[64] = {};
+    uint8_t tmp_key[20];
+
+    if (key_len > 64) {
+        kern_sha1_init(&ctx);
+        kern_sha1_update(&ctx, key, (uint32_t)key_len);
+        kern_sha1_final(tmp_key, &ctx);
+        key = tmp_key;
+        key_len = 20;
+    }
+
+    memcpy(k_ipad, key, key_len);
+    memcpy(k_opad, key, key_len);
+
+    for (int i = 0; i < 64; i++) {
+        k_ipad[i] ^= 0x36;
+        k_opad[i] ^= 0x5c;
+    }
+
+    kern_sha1_init(&ctx);
+    kern_sha1_update(&ctx, k_ipad, 64);
+    kern_sha1_update(&ctx, data, (uint32_t)data_len);
+    kern_sha1_final(mac, &ctx);
+
+    kern_sha1_init(&ctx);
+    kern_sha1_update(&ctx, k_opad, 64);
+    kern_sha1_update(&ctx, mac, 20);
+    kern_sha1_final(mac, &ctx);
+}
+
+static void derivePMK(const uint8_t *passphrase, const uint8_t *ssid, size_t ssid_len, uint8_t pmk[32])
+{
+    size_t pass_len = strlen((const char *)passphrase);
+    uint8_t salt[128];
+    if (ssid_len > 120) ssid_len = 120;
+    memcpy(salt, ssid, ssid_len);
+
+    for (int block = 1; block <= 2; block++) {
+        salt[ssid_len]     = (uint8_t)((block >> 24) & 0xff);
+        salt[ssid_len + 1] = (uint8_t)((block >> 16) & 0xff);
+        salt[ssid_len + 2] = (uint8_t)((block >> 8) & 0xff);
+        salt[ssid_len + 3] = (uint8_t)(block & 0xff);
+
+        uint8_t u[20];
+        uint8_t t[20];
+        kern_hmac_sha1(passphrase, pass_len, salt, ssid_len + 4, u);
+        memcpy(t, u, 20);
+
+        for (int iter = 1; iter < 4096; iter++) {
+            kern_hmac_sha1(passphrase, pass_len, u, 20, u);
+            for (int i = 0; i < 20; i++) {
+                t[i] ^= u[i];
+            }
+        }
+
+        if (block == 1) {
+            memcpy(pmk, t, 20);
+        } else {
+            memcpy(pmk + 20, t, 12);
+        }
+    }
+}
+
+static void derivePTK(const uint8_t pmk[32], const uint8_t anonce[32], const uint8_t snonce[32],
+                      const uint8_t spa[6], const uint8_t aa[6], uint8_t ptk[64])
+{
+    uint8_t min_mac[6], max_mac[6];
+    if (memcmp(spa, aa, 6) < 0) {
+        memcpy(min_mac, spa, 6);
+        memcpy(max_mac, aa, 6);
+    } else {
+        memcpy(min_mac, aa, 6);
+        memcpy(max_mac, spa, 6);
+    }
+
+    uint8_t min_nonce[32], max_nonce[32];
+    if (memcmp(snonce, anonce, 32) < 0) {
+        memcpy(min_nonce, snonce, 32);
+        memcpy(max_nonce, anonce, 32);
+    } else {
+        memcpy(min_nonce, anonce, 32);
+        memcpy(max_nonce, snonce, 32);
+    }
+
+    uint8_t data[100];
+    const char *label = "Pairwise key expansion";
+    memcpy(data, label, 22);
+    data[22] = 0;
+    memcpy(data + 23, min_mac, 6);
+    memcpy(data + 29, max_mac, 6);
+    memcpy(data + 35, min_nonce, 32);
+    memcpy(data + 67, max_nonce, 32);
+    size_t data_len = 23 + 6 + 6 + 32 + 32;
+
+    uint8_t hash[20];
+    for (int i = 0; i < 4; i++) {
+        data[data_len] = (uint8_t)i;
+        kern_hmac_sha1(pmk, 32, data, data_len + 1, hash);
+        if (i < 3) {
+            memcpy(ptk + i * 20, hash, 20);
+        } else {
+            memcpy(ptk + i * 20, hash, 4);
+        }
+    }
+}
+
+#undef rol
+#undef blk0
+#undef blk
+#undef r0
+#undef r1
+#undef r2
+#undef r3
+#undef r4
 
 /* PCI device-ID → chip_info lookup (PCIe chips only) */
 struct rtw88_pci_id_entry {
@@ -361,6 +573,15 @@ void RTW88IEEE80211::rxFrame(struct sk_buff *skb)
     struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
     __le16 fc = hdr->frame_control;
 
+    /* Diagnostics: log a periodic sample of RX activity so we can confirm
+     * whether the firmware is actually delivering frames during scan. */
+    _rxFrameCount++;
+    if (_state == RTW88_STATE_SCANNING && (_rxFrameCount % 16) == 1) {
+        uint16_t fcv = le16_to_cpu(fc);
+        IOLog("rtw88: rxFrame #%u (fc=0x%04x type=%u stype=0x%02x len=%u)\n",
+              _rxFrameCount, fcv, (fcv >> 2) & 3, fcv & 0x00f0, skb->len);
+    }
+
     if (ieee80211_is_mgmt(fc)) {
         processRxMgmt(skb);
     } else if (ieee80211_is_data(fc)) {
@@ -386,19 +607,38 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
         break;
 
     case 0x00B0: /* auth */
-        if (_state == RTW88_STATE_AUTHENTICATING)
-            doAssociate();
+        if (_state == RTW88_STATE_AUTHENTICATING) {
+            uint8_t *body = skb->data + sizeof(struct ieee80211_hdr_3addr);
+            uint32_t body_len = skb->len - sizeof(struct ieee80211_hdr_3addr);
+            /* auth body: algo(2), seq(2), status(2) */
+            if (body_len >= 6) {
+                uint16_t status = (uint16_t)(body[4] | (body[5] << 8));
+                if (status == 0) {
+                    IOLog("rtw88: auth success, sending assoc\n");
+                    doAssociate();
+                } else {
+                    IOLog("rtw88: auth failed status=%u, retrying\n", status);
+                    _state = RTW88_STATE_IDLE;
+                }
+            } else {
+                doAssociate(); /* assume success */
+            }
+        }
         kfree_skb(skb);
         break;
 
     case 0x0010: /* assoc response */
-        if (_state == RTW88_STATE_ASSOCIATING) {
-            if (_wpa2)
-                _state = RTW88_STATE_HANDSHAKING;
-            else
-                _state = RTW88_STATE_CONNECTED;
-        }
-        kfree_skb(skb);
+        if (_state == RTW88_STATE_ASSOCIATING)
+            processAssocResponse(skb);
+        else
+            kfree_skb(skb);
+        break;
+
+    case 0x0030: /* reassoc response */
+        if (_state == RTW88_STATE_ASSOCIATING)
+            processAssocResponse(skb);
+        else
+            kfree_skb(skb);
         break;
 
     case 0x00A0: /* disassoc */
@@ -555,7 +795,9 @@ void RTW88IEEE80211::txStatus(struct sk_buff *skb)
 
 void RTW88IEEE80211::scanDone(bool aborted)
 {
-    IOLog("rtw88: scan done (aborted=%d), found %u APs\n", aborted, _bssCount);
+    IOLog("rtw88: scan done (aborted=%d), found %u APs, "
+          "saw %u RX frames during scan\n",
+          aborted, _bssCount, _rxFrameCount);
     if (_state == RTW88_STATE_SCANNING)
         _state = RTW88_STATE_IDLE;
 }
@@ -598,7 +840,13 @@ IOReturn RTW88IEEE80211::cmdScan()
     req.req.channels = chans;
     req.req.n_channels = n_chans;
 
-    if (_hw->ops->hw_scan(_hw, _vif, &req) != 0) {
+    _rxFrameCount = 0;  /* reset diagnostic counter at scan start */
+
+    IOLog("rtw88: hw_scan starting -- %d channels (2.4G+5G)\n", n_chans);
+
+    int hw_scan_ret = _hw->ops->hw_scan(_hw, _vif, &req);
+    if (hw_scan_ret != 0) {
+        IOLog("rtw88: hw_scan returned %d -- scan not started\n", hw_scan_ret);
         _state = RTW88_STATE_IDLE;
         return kIOReturnError;
     }
@@ -645,17 +893,46 @@ void RTW88IEEE80211::doAuthenticate()
 {
     if (!_hw || !_vif) return;
 
-    /* Configure BSS parameters */
+    IOLog("rtw88: authenticating to BSSID %02x:%02x:%02x:%02x:%02x:%02x ch=%u\n",
+          _targetBSS.bssid[0], _targetBSS.bssid[1], _targetBSS.bssid[2],
+          _targetBSS.bssid[3], _targetBSS.bssid[4], _targetBSS.bssid[5],
+          _targetBSS.channel);
+
+    /* ----- 1. Tune hardware to target channel ----- */
+    if (_hw->ops && _hw->ops->config) {
+        /* Find the ieee80211_channel object for the target channel */
+        struct ieee80211_channel *chan = nullptr;
+        for (int b = 0; b < NL80211_NUM_BANDS && !chan; b++) {
+            struct ieee80211_supported_band *band = _hw->wiphy ? _hw->wiphy->bands[b] : nullptr;
+            if (!band) continue;
+            for (int j = 0; j < band->n_channels; j++) {
+                if (band->channels[j].hw_value == _targetBSS.channel) {
+                    chan = &band->channels[j];
+                    break;
+                }
+            }
+        }
+        if (chan) {
+            _hw->conf.chandef.chan  = chan;
+            _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
+            /* Clear idle flag so driver leaves IPS */
+            _hw->conf.flags &= ~IEEE80211_CONF_IDLE;
+            _hw->ops->config(_hw, 0, IEEE80211_CONF_CHANGE_CHANNEL | IEEE80211_CONF_CHANGE_IDLE);
+        } else {
+            IOLog("rtw88: could not find channel %u in band tables\n", _targetBSS.channel);
+        }
+    }
+
+    /* ----- 2. Configure BSS parameters (BSSID) ----- */
     struct ieee80211_bss_conf *bss = &_vif->bss_conf;
     bss->bssid = bss->bssid_buf;
     memcpy(bss->bssid_buf, _targetBSS.bssid, 6);
     bss->assoc  = false;
-
-    uint64_t changed = BSS_CHANGED_BSSID;
+    bss->aid    = 0;
     if (_hw->ops && _hw->ops->bss_info_changed)
-        _hw->ops->bss_info_changed(_hw, _vif, bss, changed);
+        _hw->ops->bss_info_changed(_hw, _vif, bss, BSS_CHANGED_BSSID);
 
-    /* Build and send Authentication frame */
+    /* ----- 3. Send Authentication frame ----- */
     uint8_t auth[30] = {};
     uint32_t authlen = 0;
     buildAuthReq(auth, &authlen);
@@ -676,6 +953,69 @@ void RTW88IEEE80211::doAssociate()
 
     _state = RTW88_STATE_ASSOCIATING;
     uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d); _timer->wakeAtTime(d);
+}
+
+void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
+{
+    /* Assoc-resp body (after 24-byte 802.11 hdr):
+     * capability(2), status(2), AID(2), [IEs...] */
+    const uint8_t *body    = skb->data + sizeof(struct ieee80211_hdr_3addr);
+    uint32_t       bodylen = skb->len  - sizeof(struct ieee80211_hdr_3addr);
+    kfree_skb(skb);
+
+    if (bodylen < 6) {
+        IOLog("rtw88: assoc-resp too short\n");
+        _state = RTW88_STATE_IDLE;
+        return;
+    }
+    uint16_t status = (uint16_t)(body[2] | (body[3] << 8));
+    uint16_t aid    = (uint16_t)((body[4] | (body[5] << 8)) & 0x3FFF);
+
+    if (status != 0) {
+        IOLog("rtw88: assoc failed status=%u\n", status);
+        _state = RTW88_STATE_IDLE;
+        return;
+    }
+    IOLog("rtw88: associated! AID=%u\n", aid);
+    _assocAID = aid;
+
+    /* ----- 1. Allocate and register peer STA ----- */
+    if (_sta == nullptr && _hw->ops && _hw->ops->sta_add) {
+        size_t sta_sz = sizeof(struct ieee80211_sta) + _hw->sta_data_size;
+        _sta = (struct ieee80211_sta *)IOMallocZero(sta_sz);
+        if (_sta) {
+            memcpy(_sta->addr, _targetBSS.bssid, ETH_ALEN);
+            _sta->aid  = aid;
+            _sta->wme  = false;
+            _hw->ops->sta_add(_hw, _vif, _sta);
+        }
+    }
+
+    /* ----- 2. Notify driver of full association ----- */
+    if (_hw->ops && _hw->ops->bss_info_changed) {
+        struct ieee80211_bss_conf *bss = &_vif->bss_conf;
+        bss->assoc = true;
+        bss->aid   = aid;
+        bss->qos   = true;
+        bss->bssid = bss->bssid_buf;
+        _vif->cfg.assoc = true;
+        _vif->cfg.aid   = aid;
+        _hw->ops->bss_info_changed(_hw, _vif, bss,
+            BSS_CHANGED_ASSOC | BSS_CHANGED_QOS);
+    }
+
+    if (_wpa2) {
+        _state = RTW88_STATE_HANDSHAKING;
+        IOLog("rtw88: WPA2 — waiting for EAPOL M1\n");
+        /* Derive PMK from passphrase now */
+        derivePMK((uint8_t *)_password, (uint8_t *)_targetBSS.ssid,
+                  _targetBSS.ssid_len, _pmk);
+    } else {
+        _state = RTW88_STATE_CONNECTED;
+        if (_parent)
+            _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
+    }
+    _timer->cancelTimeout();
 }
 
 bool RTW88IEEE80211::buildAuthReq(uint8_t *buf, uint32_t *len)
@@ -790,35 +1130,53 @@ void RTW88IEEE80211::doDisconnect()
 
 void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
 {
-    /* Minimal EAPOL-Key parser: just log and respond */
+    /* Minimal EAPOL-Key parser */
     if (len < 99) return;
-    /* data[0] = version, data[1] = type (3=key), data[2:3] = length */
-    if (data[1] != 3) return;
+    if (data[1] != 3) return; /* must be EAPOL-Key */
 
     uint16_t key_info = (uint16_t)((data[5] << 8) | data[6]);
-    int msg = 0;
-    /* Bit 8 = ACK, bit 9 = Install, bit 13 = MIC */
-    if ((key_info & 0x0100) && !(key_info & 0x0200)) msg = 1; /* M1 */
-    if ((key_info & 0x2000) && !(key_info & 0x0100)) msg = 2; /* M2 ack? no */
-    if ((key_info & 0x0300) == 0x0300) msg = 3;               /* M3 */
+    /* M1: Pairwise=1, ACK=1, MIC=0, Secure=0 */
+    bool is_m1 = (key_info & 0x0108) == 0x0108 && !(key_info & 0x0200);
+    /* M3: Pairwise=1, Install=1, ACK=1, MIC=1 */
+    bool is_m3 = (key_info & 0x01C8) == 0x01C8 && (key_info & 0x0200);
 
-    IOLog("rtw88: EAPOL key_info=0x%04x msg=%d\n", key_info, msg);
+    IOLog("rtw88: EAPOL key_info=0x%04x M1=%d M3=%d\n", key_info, is_m1, is_m3);
 
-    if (msg == 1) {
-        /* Copy ANonce from offset 17 */
+    if (is_m1) {
+        /* data[17..48] = ANonce */
         memcpy(_anonce, data + 17, 32);
         /* Generate SNonce */
         read_random(_snonce, 32);
-        /* Send M2 */
-        sendEAPOLKey(2, data + 9, false, false, true);
-    } else if (msg == 3) {
-        /* Copy replay counter, install PTK, send M4 */
+        /* Derive PTK from PMK + ANonce + SNonce + MACs */
+        derivePTK(_pmk, _anonce, _snonce, _macAddr, _targetBSS.bssid, _ptk);
+        /* Send M2 with MIC */
         memcpy(_replayCtr, data + 9, 8);
-        sendEAPOLKey(4, _replayCtr, true, false, true);
-        /* Install GTK via set_key */
+        sendEAPOLKey(2, _replayCtr, false, false, true);
+    } else if (is_m3) {
+        /* Update replay counter and send M4 */
+        memcpy(_replayCtr, data + 9, 8);
+        sendEAPOLKey(4, _replayCtr, false, false, true);
+
+        /* Install PTK (TK is bytes 32..47 of PTK for CCMP) */
+        if (_hw && _hw->ops && _hw->ops->set_key) {
+            struct ieee80211_key_conf *key =
+                (struct ieee80211_key_conf *)IOMallocZero(
+                    sizeof(struct ieee80211_key_conf));
+            if (key) {
+                key->cipher   = WLAN_CIPHER_SUITE_CCMP;
+                key->keyidx   = 0;
+                key->flags    = IEEE80211_KEY_FLAG_PAIRWISE;
+                key->keylen   = 16;
+                memcpy(key->key, _ptk + 32, 16); /* TK */
+                _hw->ops->set_key(_hw, SET_KEY, _vif, _sta, key);
+                IOFree(key, sizeof(*key));
+                IOLog("rtw88: PTK installed\n");
+            }
+        }
         _state = RTW88_STATE_CONNECTED;
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
+        IOLog("rtw88: WPA2 connected!\n");
     }
 }
 
