@@ -929,9 +929,11 @@ void RTW88IEEE80211::doAuthenticate()
         if (chan) {
             _hw->conf.chandef.chan  = chan;
             _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
-            /* Clear idle flag so driver leaves IPS */
-            _hw->conf.flags &= ~IEEE80211_CONF_IDLE;
-            _hw->ops->config(_hw, 0, IEEE80211_CONF_CHANGE_CHANNEL | IEEE80211_CONF_CHANGE_IDLE);
+            /* Only request channel change — chip is already awake after scan.
+             * Passing IEEE80211_CONF_CHANGE_IDLE triggers rtw_leave_ips →
+             * rtw_power_on which re-downloads firmware to an active chip,
+             * resetting its state and hanging the PCIe bus. */
+            _hw->ops->config(_hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
         } else {
             IOLog("rtw88: could not find channel %u in band tables\n", _targetBSS.channel);
         }
