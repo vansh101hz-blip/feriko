@@ -576,7 +576,27 @@ IOReturn RTW88IEEE80211::cmdScan()
     _state = RTW88_STATE_SCANNING;
 
     struct ieee80211_scan_request req = {};
-    /* Scan all channels — channels array NULL means "scan all" in our shim */
+    struct ieee80211_channel *chans[256];
+    int n_chans = 0;
+    
+    if (_hw->wiphy) {
+        for (int i = 0; i < NL80211_NUM_BANDS; i++) {
+            struct ieee80211_supported_band *band = _hw->wiphy->bands[i];
+            if (!band) continue;
+            for (int j = 0; j < band->n_channels; j++) {
+                if (n_chans < 256) {
+                    /* Only scan enabled channels */
+                    if (!(band->channels[j].flags & IEEE80211_CHAN_DISABLED)) {
+                        chans[n_chans++] = &band->channels[j];
+                    }
+                }
+            }
+        }
+    }
+    
+    req.req.channels = chans;
+    req.req.n_channels = n_chans;
+
     if (_hw->ops->hw_scan(_hw, _vif, &req) != 0) {
         _state = RTW88_STATE_IDLE;
         return kIOReturnError;
