@@ -88,6 +88,10 @@ public:
     /* 802.11 state machine accessors */
     RTW88IEEE80211 *get80211() { return _ieee80211; }
 
+    /* WorkLoop and CmdGate accessors for C compat shims */
+    IOWorkLoop *getWorkLoop() const { return _workLoop; }
+    IOCommandGate *getCmdGate() const { return _cmdGate; }
+
     /* MMIO base — used by compat ioremap shim */
     volatile void *mmioBase() const { return _mmioBase; }
 
