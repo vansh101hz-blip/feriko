@@ -8,6 +8,22 @@
 #include <string.h>
 
 /*
+ * Low-memory skb data allocator — implemented in src/kext/RTW88PCIDevice.cpp.
+ *
+ * skb->head must live below the 4GB physical line so the chip's 32-bit DMA
+ * engine can read/write it directly without bouncing.  See compat_dma_map
+ * in RTW88PCIDevice.cpp for the matching VA→PA shortcut.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+void *rtw88_dma_alloc_skbdata(size_t size);
+void  rtw88_dma_free_skbdata(void *data, size_t size);
+#ifdef __cplusplus
+}
+#endif
+
+/*
  * sk_buff shim for rtw88 macOS port.
  *
  * The real implementation in the kext routes through mbuf_t, but the driver
@@ -95,8 +111,10 @@ static inline void skb_unlink(struct sk_buff *skb, struct sk_buff_head *list)
 static inline void skb_queue_purge(struct sk_buff_head *list)
 {
     struct sk_buff *skb;
-    while ((skb = skb_dequeue(list)) != NULL)
-        kfree(skb->head);
+    while ((skb = skb_dequeue(list)) != NULL) {
+        if (skb->head)
+            rtw88_dma_free_skbdata(skb->head, (size_t)(skb->end - skb->head));
+    }
 }
 
 #define skb_queue_walk_safe(queue, skb, tmp) \
@@ -105,15 +123,17 @@ static inline void skb_queue_purge(struct sk_buff_head *list)
          &(skb)->list != &(queue)->list; \
          (skb) = (tmp), (tmp) = container_of((tmp)->list.next, struct sk_buff, list))
 
-/* Allocate sk_buff with headroom */
+/* Allocate sk_buff with headroom.  The data buffer must be DMA-reachable
+ * from the chip's 32-bit ring descriptors, so we allocate it from the
+ * 4GB-low pool managed by RTW88PCIDevice::allocCoherent. */
 static inline struct sk_buff *alloc_skb(u32 size, gfp_t priority)
 {
     u32 alloc_size = size + 64; /* extra for head/tail room */
-    u8 *data = (u8 *)kmalloc(alloc_size, priority);
+    u8 *data = (u8 *)rtw88_dma_alloc_skbdata(alloc_size);
     if (!data) return NULL;
 
     struct sk_buff *skb = (struct sk_buff *)kzalloc(sizeof(*skb), priority);
-    if (!skb) { kfree(data); return NULL; }
+    if (!skb) { rtw88_dma_free_skbdata(data, alloc_size); return NULL; }
 
     skb->head = data;
     skb->data = data;
@@ -142,7 +162,8 @@ static inline struct sk_buff *netdev_alloc_skb_ip_align(void *dev, u32 size)
 static inline void kfree_skb(struct sk_buff *skb)
 {
     if (skb) {
-        kfree(skb->head);
+        if (skb->head)
+            rtw88_dma_free_skbdata(skb->head, (size_t)(skb->end - skb->head));
         kfree(skb);
     }
 }
