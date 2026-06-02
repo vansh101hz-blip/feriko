@@ -517,6 +517,18 @@ void RTW88PCIDevice::injectRxFrame(mbuf_t m)
         freePacket(m);
         return;
     }
+
+    /* Last line of defense: never hand the networking stack a malformed
+     * packet.  An mbuf with pkthdr.len < 14 (or absurdly large) makes
+     * ether_input() underflow the length and panic the kernel with
+     * "Failed mbuf validity check: len -14".  Drop + log instead. */
+    size_t plen = mbuf_pkthdr_len(m);
+    if (plen < 14 || plen > 4096) {
+        IOLog("rtw88: injectRxFrame: dropping bogus mbuf (pkthdr.len=%zu)\n", plen);
+        freePacket(m);
+        return;
+    }
+
     _iface->inputPacket(m);
     if (_iface) {
         IONetworkStats *stats = (IONetworkStats *)_iface->getNetworkData(
