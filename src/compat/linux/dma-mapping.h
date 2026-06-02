@@ -92,9 +92,14 @@ static inline int dma_set_mask_and_coherent(struct device *dev, u64 mask) { retu
 static inline int dma_set_mask(struct device *dev, u64 mask)              { return 0; }
 static inline int dma_set_coherent_mask(struct device *dev, u64 mask)     { return 0; }
 
+/* Match what compat_dma_map actually returns on failure: it returns 0 when
+ * the bounce-buffer alloc fails.  Treat BOTH 0 and -1 as errors so the
+ * driver doesn't silently program HW descriptors with bogus DMA addresses
+ * (which corrupts the TX ring state — wp advances, HW chews garbage and
+ * advances rp, eventually deadlocking at wp+1 == rp). */
 static inline bool dma_mapping_error(struct device *dev, dma_addr_t addr)
 {
-    return addr == (dma_addr_t)-1;
+    return addr == 0 || addr == (dma_addr_t)-1;
 }
 
 /* Page abstraction for RX ring allocations */
