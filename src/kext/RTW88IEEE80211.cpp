@@ -14,6 +14,9 @@
 /* Debug stage checkpoint — logs message only (no sleep). */
 #define RTW88_STAGE(fmt, ...) IOLog("rtw88: ---- STAGE: " fmt " ----\n", ##__VA_ARGS__)
 
+/* Chain-safe packet mbuf builder (defined below). */
+static mbuf_t rtw88_make_packet_mbuf(const void *src, uint32_t len);
+
 extern "C" {
 #include "../compat/rtw88_compat.h"
 
@@ -779,20 +782,30 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
     uint32_t paylen = skb->len - hdrlen - 8; /* strip LLC/SNAP */
     uint32_t ethlen = 14 + paylen;
 
+    /* Assemble the 14-byte Ethernet header into a small stack buffer, then
+     * copy header+payload into the mbuf with mbuf_copyback().  We must use
+     * copyback (not mbuf_data + memcpy): for large frames (A-MSDU can be
+     * several KB) mbuf_allocpacket() returns a multi-segment chain, and a
+     * raw memcpy of the whole packet into the first segment overflows the
+     * mbuf zone and corrupts the kernel heap. */
     mbuf_t m = nullptr;
     if (mbuf_allocpacket(MBUF_WAITOK, ethlen, nullptr, &m) != 0) {
         kfree_skb(skb); return;
     }
-    mbuf_setlen(m, ethlen);
-    mbuf_pkthdr_setlen(m, ethlen);
 
-    uint8_t *eth = (uint8_t *)mbuf_data(m);
-    /* DA = addr1 (recipient), SA = addr2 or addr3 depending on DS bits */
-    memcpy(eth,     hdr->addr1, 6);  /* DA */
-    memcpy(eth + 6, hdr->addr3, 6);  /* SA */
-    eth[12] = (uint8_t)(ethertype >> 8);
-    eth[13] = (uint8_t)(ethertype & 0xff);
-    memcpy(eth + 14, llc + 8, paylen);
+    uint8_t ehdr[14];
+    /* DA = addr1 (recipient), SA = addr3 (original source via DS) */
+    memcpy(ehdr,     hdr->addr1, 6);  /* DA */
+    memcpy(ehdr + 6, hdr->addr3, 6);  /* SA */
+    ehdr[12] = (uint8_t)(ethertype >> 8);
+    ehdr[13] = (uint8_t)(ethertype & 0xff);
+
+    if (mbuf_copyback(m, 0,  14,     ehdr,    MBUF_WAITOK) != 0 ||
+        mbuf_copyback(m, 14, paylen, llc + 8, MBUF_WAITOK) != 0) {
+        mbuf_freem(m);
+        kfree_skb(skb);
+        return;
+    }
 
     kfree_skb(skb);
     if (_parent) _parent->injectRxFrame(m);
@@ -1288,12 +1301,9 @@ void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
     }
 
     /* Transmit as 802.11 data frame */
-    mbuf_t m = nullptr;
     uint32_t ethlen = 14 + 4 + 95; /* eth(14) + EAPOL header(4) + EAPOL-Key body(95) */
-    if (mbuf_allocpacket(MBUF_WAITOK, ethlen, nullptr, &m) != 0) return;
-    mbuf_setlen(m, ethlen);
-    mbuf_pkthdr_setlen(m, ethlen);
-    memcpy(mbuf_data(m), frame, ethlen);
+    mbuf_t m = rtw88_make_packet_mbuf(frame, ethlen);
+    if (!m) return;
     txDataFrame(m);
 }
 
@@ -1345,6 +1355,35 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
 /*  mbuf ↔ sk_buff conversion                                           */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Allocate a packet-header mbuf and copy `len` bytes from `src` into it.
+ *
+ * IMPORTANT: mbuf_allocpacket() may return a *chain* of mbufs (multiple
+ * ~2 KB clusters) for packets larger than one cluster — e.g. A-MSDU
+ * aggregated 802.11 data frames, which can be several KB.  In that case
+ * mbuf_data(m) points only at the FIRST segment, and writing the whole
+ * packet there overflows into adjacent kernel/mbuf-zone memory, corrupting
+ * the heap (later manifesting as a GP fault in an unrelated mbuf walk such
+ * as sbconcat_mbufs).
+ *
+ * mbuf_copyback() correctly distributes the data across every segment of
+ * the chain and never overflows, so we use it instead of a raw memcpy.
+ * mbuf_allocpacket() already sets each segment's length and pkthdr.len, so
+ * we must NOT call mbuf_setlen() (which would wrongly set the first
+ * segment's length to the whole-packet length).
+ */
+static mbuf_t rtw88_make_packet_mbuf(const void *src, uint32_t len)
+{
+    mbuf_t m = nullptr;
+    if (mbuf_allocpacket(MBUF_WAITOK, len, nullptr, &m) != 0)
+        return nullptr;
+    if (mbuf_copyback(m, 0, len, src, MBUF_WAITOK) != 0) {
+        mbuf_freem(m);
+        return nullptr;
+    }
+    return m;
+}
+
 struct sk_buff *RTW88IEEE80211::mbufToSkb(mbuf_t m)
 {
     size_t total = mbuf_pkthdr_len(m);
@@ -1366,13 +1405,7 @@ struct sk_buff *RTW88IEEE80211::mbufToSkb(mbuf_t m)
 
 mbuf_t RTW88IEEE80211::skbToMbuf(struct sk_buff *skb)
 {
-    mbuf_t m = nullptr;
-    if (mbuf_allocpacket(MBUF_WAITOK, skb->len, nullptr, &m) != 0)
-        return nullptr;
-    mbuf_setlen(m, skb->len);
-    mbuf_pkthdr_setlen(m, skb->len);
-    memcpy(mbuf_data(m), skb->data, skb->len);
-    return m;
+    return rtw88_make_packet_mbuf(skb->data, skb->len);
 }
 
 /* ------------------------------------------------------------------ */
