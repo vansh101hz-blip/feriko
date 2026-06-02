@@ -806,6 +806,9 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
         kfree_skb(skb);
         return;
     }
+    /* Set pkthdr.len explicitly — see rtw88_make_packet_mbuf().  Without this
+     * ether_input() underflows it to -14 and the kernel panics. */
+    mbuf_pkthdr_setlen(m, ethlen);
 
     kfree_skb(skb);
     if (_parent) _parent->injectRxFrame(m);
@@ -1381,6 +1384,11 @@ static mbuf_t rtw88_make_packet_mbuf(const void *src, uint32_t len)
         mbuf_freem(m);
         return nullptr;
     }
+    /* mbuf_allocpacket does not reliably set pkthdr.len, and depending on the
+     * kernel, mbuf_copyback may not either.  Set it explicitly — otherwise
+     * ether_input() strips the 14-byte header from a pkthdr.len of 0 and
+     * panics with "Failed mbuf validity check: len -14". */
+    mbuf_pkthdr_setlen(m, len);
     return m;
 }
 
