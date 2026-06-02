@@ -1375,6 +1375,14 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
         }
     }
 
+    /* Route to the Best-Effort hardware ring with a BE qsel.  queue_mapping
+     * picks the ring (ac_to_hwq[AC_BE] = RTW_TX_QUEUE_BE); priority becomes
+     * the TX-desc qsel (TID 0 = BE).  Without this the frame defaults to
+     * queue_mapping 0 (AC_VO) and lands in the wrong ring. */
+    skb_set_queue_mapping(skb, IEEE80211_AC_BE);
+    skb->priority = 0;
+    skb->protocol = cpu_to_be16(ethertype);
+
     struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
     memset(info, 0, sizeof(*info));
     info->flags = IEEE80211_TX_CTL_FIRST_FRAGMENT;

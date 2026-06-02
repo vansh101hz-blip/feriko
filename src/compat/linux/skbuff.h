@@ -23,7 +23,8 @@ struct sk_buff {
     u32       data_len; /* fragment length */
     u16       protocol;
     u8        pkt_type;
-    u32       priority;
+    u32       priority;       /* 802.11 TID — becomes the TX-desc qsel */
+    u16       queue_mapping;  /* AC index — selects the hw TX ring (ac_to_hwq) */
     u32       ip_summed;
 
     /* Control block — 48 bytes, used by IEEE80211/driver for private data */
@@ -315,15 +316,19 @@ static inline void skb_copy_header(struct sk_buff *dst,
     dst->priority = src->priority;
 }
 
-/* queue_mapping: stored in priority field for simplicity */
+/* queue_mapping (AC -> ring) and priority (TID -> qsel) are DISTINCT in the
+ * rtw88 driver: rtw_tx_queue_mapping() uses skb_get_queue_mapping() to choose
+ * the hardware ring, while rtw_tx_pkt_info_update() uses skb->priority as the
+ * TX-descriptor qsel.  They must NOT alias (matches FreeBSD LinuxKPI's
+ * separate ->qmap and ->priority). */
 static inline u16 skb_get_queue_mapping(const struct sk_buff *skb)
 {
-    return (u16)skb->priority;
+    return skb->queue_mapping;
 }
 
 static inline void skb_set_queue_mapping(struct sk_buff *skb, u16 queue_mapping)
 {
-    skb->priority = queue_mapping;
+    skb->queue_mapping = queue_mapping;
 }
 
 #endif /* _RTW88_COMPAT_SKBUFF_H */
