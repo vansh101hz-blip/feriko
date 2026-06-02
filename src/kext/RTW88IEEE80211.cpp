@@ -1045,6 +1045,22 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
             memcpy(_sta->addr, _targetBSS.bssid, ETH_ALEN);
             _sta->aid  = aid;
             _sta->wme  = false;
+
+            /* Populate supported rates + HT caps so rtw_update_sta_info()
+             * builds a non-empty rate-adaptation mask.  Without this the
+             * firmware has no valid TX rate for UNICAST frames and they stall
+             * in the TX ring -> "failed to write TX skb to HCI".  Broadcast
+             * (e.g. DHCP) still works because it uses a fixed basic rate. */
+            _sta->deflink.supp_rates[NL80211_BAND_2GHZ] = 0xFFF; /* CCK+OFDM */
+            _sta->deflink.supp_rates[NL80211_BAND_5GHZ] = 0xFF;  /* OFDM     */
+            _sta->deflink.bandwidth = IEEE80211_STA_RX_BW_20;
+            _sta->deflink.ht_cap.ht_supported  = true;
+            _sta->deflink.ht_cap.cap           = 0x0020; /* HT_CAP_SGI_20 */
+            _sta->deflink.ht_cap.ampdu_factor  = 3;      /* 64 KB */
+            _sta->deflink.ht_cap.ampdu_density = 0;
+            _sta->deflink.ht_cap.mcs.rx_mask[0] = 0xFF;  /* MCS 0-7  (1SS) */
+            _sta->deflink.ht_cap.mcs.rx_mask[1] = 0xFF;  /* MCS 8-15 (2SS) */
+
             _hw->ops->sta_add(_hw, _vif, _sta);
         }
     }
