@@ -158,4 +158,16 @@ void rtw88_reenable_interrupt(void);
  * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
 bool rtw88_is_scanning(void);
 
+/*
+ * Configure channel + BSSID in the chip for the connect flow.
+ * Bypasses rtw_ops_config / rtw_ops_bss_info_changed (and their
+ * rtw_leave_lps_deep MMIO-read polling) to avoid post-scan PCIe hangs.
+ * Caller must set hw->conf.chandef before calling.
+ */
+struct ieee80211_hw;
+struct ieee80211_vif;
+void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
+                             struct ieee80211_vif *vif,
+                             const uint8_t *bssid);
+
 #endif /* _RTW88_COMPAT_H */

@@ -921,66 +921,92 @@ void RTW88IEEE80211::doAuthenticate()
 {
     if (!_hw || !_vif) return;
 
-    IOLog("rtw88: doAuthenticate BSSID %02x:%02x:%02x:%02x:%02x:%02x ch=%u\n",
+    IOLog("rtw88: doAuthenticate entry — BSSID %02x:%02x:%02x:%02x:%02x:%02x ch=%u\n",
           _targetBSS.bssid[0], _targetBSS.bssid[1], _targetBSS.bssid[2],
           _targetBSS.bssid[3], _targetBSS.bssid[4], _targetBSS.bssid[5],
           _targetBSS.channel);
 
-    /* Wait for post-scan MMIO cleanup (rtw_hw_scan_complete via c2h_work).
-     * That workqueue task holds rtwdev->mutex while doing MMIO writes; if we
-     * race it, the channel-change writes can hang the PCIe bus.
-     * RTW_FLAG_SCANNING is cleared at the very end of that sequence. */
-    for (int i = 0; i < 50; i++) {
+    /* Wait for RTW_FLAG_SCANNING to clear.
+     * The flag is cleared inside rtw_core_scan_complete() which runs under
+     * rtwdev->mutex in the c2h_work thread. */
+    for (int i = 0; i < 100; i++) {
         if (!rtw88_is_scanning()) break;
-        IOSleep(100);
+        IOSleep(50);
     }
-    IOLog("rtw88: doAuthenticate: scan flag clear, proceeding\n");
+    IOLog("rtw88: doAuthenticate: scan flag clear\n");
 
-    /* ----- 1. Tune hardware to target channel ----- */
-    if (_hw->ops && _hw->ops->config) {
-        struct ieee80211_channel *chan = nullptr;
-        for (int b = 0; b < NL80211_NUM_BANDS && !chan; b++) {
-            struct ieee80211_supported_band *band = _hw->wiphy ? _hw->wiphy->bands[b] : nullptr;
-            if (!band) continue;
-            for (int j = 0; j < band->n_channels; j++) {
-                if (band->channels[j].hw_value == _targetBSS.channel) {
-                    chan = &band->channels[j];
-                    break;
-                }
+    /* Firmware settle delay.
+     *
+     * After HW scan the firmware needs ~200-500 ms to fully exit its
+     * internal scan-mode critical section before it can safely process
+     * channel-switch register writes.  On Linux/FreeBSD this gap is filled
+     * naturally by the wpa_supplicant userspace round-trip; we must add it
+     * explicitly.  Without this, rtw_set_channel's BB/RF MMIO reads hit the
+     * chip while the firmware is still transitioning → PCIe bus hang →
+     * system freeze.  500 ms is comfortably below the watch-dog LPS timer
+     * (~2 s), so the chip stays awake. */
+    IOSleep(500);
+    IOLog("rtw88: doAuthenticate: firmware settled\n");
+
+    /* ----- 1. Channel switch + BSSID (single mutex section) ----- *
+     *
+     * We call rtw88_connect_hw_setup() instead of ops->config +
+     * ops->bss_info_changed because both of those call rtw_leave_lps_deep()
+     * → __rtw_fw_leave_lps_check_reg() → polling MMIO reads on REG_TCR.
+     * If the chip is slow to respond, those reads stall the calling CPU core
+     * indefinitely (PCIe timeout → system freeze).
+     *
+     * rtw88_connect_hw_setup() holds rtwdev->mutex, calls rtw_set_channel()
+     * (MMIO writes) and rtw_vif_port_config(PORT_SET_BSSID) — no reads that
+     * can stall, and no LPS wake sequence. */
+    struct ieee80211_channel *chan = nullptr;
+    for (int b = 0; b < NL80211_NUM_BANDS && !chan; b++) {
+        struct ieee80211_supported_band *band =
+            (_hw->wiphy) ? _hw->wiphy->bands[b] : nullptr;
+        if (!band) continue;
+        for (int j = 0; j < band->n_channels; j++) {
+            if (band->channels[j].hw_value == _targetBSS.channel) {
+                chan = &band->channels[j];
+                break;
             }
         }
-        if (chan) {
-            _hw->conf.chandef.chan  = chan;
-            _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
-            IOLog("rtw88: doAuthenticate: calling config channel=%u\n", _targetBSS.channel);
-            _hw->ops->config(_hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
-            IOLog("rtw88: doAuthenticate: config done\n");
-        } else {
-            IOLog("rtw88: doAuthenticate: channel %u not in band table\n", _targetBSS.channel);
-        }
+    }
+    if (chan) {
+        _hw->conf.chandef.chan         = chan;
+        _hw->conf.chandef.width        = NL80211_CHAN_WIDTH_20_NOHT;
+        _hw->conf.chandef.center_freq1 = chan->center_freq;
+        IOLog("rtw88: doAuthenticate: calling connect_hw_setup ch=%u\n",
+              _targetBSS.channel);
+        rtw88_connect_hw_setup(_hw, _vif, _targetBSS.bssid);
+        IOLog("rtw88: doAuthenticate: connect_hw_setup done\n");
+    } else {
+        IOLog("rtw88: doAuthenticate: ch=%u not in band table — "
+              "skipping channel switch, sending auth anyway\n",
+              _targetBSS.channel);
+        /* Still set BSSID even if channel is unknown */
+        rtw88_connect_hw_setup(_hw, _vif, _targetBSS.bssid);
     }
 
-    /* ----- 2. Configure BSSID ----- */
-    IOLog("rtw88: doAuthenticate: setting BSSID\n");
+    /* Also update the vif bss_conf bssid so any driver-internal code
+     * that reads it sees the right value. */
     struct ieee80211_bss_conf *bss = &_vif->bss_conf;
     bss->bssid = bss->bssid_buf;
     memcpy(bss->bssid_buf, _targetBSS.bssid, 6);
-    bss->assoc  = false;
-    bss->aid    = 0;
-    if (_hw->ops && _hw->ops->bss_info_changed)
-        _hw->ops->bss_info_changed(_hw, _vif, bss, BSS_CHANGED_BSSID);
-    IOLog("rtw88: doAuthenticate: BSSID set\n");
+    bss->assoc = false;
+    bss->aid   = 0;
 
-    /* ----- 3. Send Authentication frame ----- */
-    IOLog("rtw88: doAuthenticate: sending auth frame\n");
+    /* ----- 2. Send Authentication frame ----- */
+    IOLog("rtw88: doAuthenticate: building auth frame\n");
     uint8_t auth[30] = {};
     uint32_t authlen = 0;
     buildAuthReq(auth, &authlen);
+    IOLog("rtw88: doAuthenticate: transmitting auth frame (%u bytes)\n", authlen);
     txMgmtFrame(auth, authlen);
-    IOLog("rtw88: doAuthenticate: auth frame sent\n");
+    IOLog("rtw88: doAuthenticate: auth frame sent — waiting for response\n");
 
     _state = RTW88_STATE_AUTHENTICATING;
-    uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d); _timer->wakeAtTime(d);
+    uint64_t d; clock_interval_to_deadline(3000, kMillisecondScale, &d);
+    _timer->wakeAtTime(d);
 }
 
 void RTW88IEEE80211::doAssociate()

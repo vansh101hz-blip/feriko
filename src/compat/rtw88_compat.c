@@ -830,6 +830,48 @@ bool rtw88_is_scanning(void)
     return test_bit(RTW_FLAG_SCANNING, rtwdev->flags);
 }
 
+/*
+ * rtw88_connect_hw_setup — set channel + BSSID for the connect flow.
+ *
+ * Called from doAuthenticate() INSTEAD of ops->config + ops->bss_info_changed.
+ *
+ * Why not use the ops callbacks:
+ *   rtw_ops_config() calls rtw_leave_lps_deep() which calls
+ *   __rtw_fw_leave_lps_check_reg() — a polling loop of MMIO *reads*
+ *   (rtw_read32_mask on REG_TCR).  If the chip is unresponsive immediately
+ *   post-HW-scan (firmware still in internal scan-exit critical section),
+ *   those reads stall the CPU core indefinitely → PCIe timeout → system
+ *   freeze.  The rtw_ops_bss_info_changed() path has the same issue.
+ *
+ * This helper holds rtwdev->mutex, calls rtw_set_channel() directly
+ * (mostly MMIO *writes*, safe), then writes the BSSID register.
+ * The caller must populate hw->conf.chandef before calling.
+ */
+void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
+                             struct ieee80211_vif *vif,
+                             const uint8_t *bssid)
+{
+    if (!hw || !hw->priv || !vif || !bssid) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+    struct rtw_vif *rtwvif = (struct rtw_vif *)vif->drv_priv;
+
+    mutex_lock(&rtwdev->mutex);
+
+    /* Switch to the AP's channel (uses hw->conf.chandef set by caller). */
+    IOLog("rtw88: connect_hw_setup: rtw_set_channel\n");
+    rtw_set_channel(rtwdev);
+    IOLog("rtw88: connect_hw_setup: set_channel done\n");
+
+    /* Write target BSSID to port-0 hardware register. */
+    if (rtwvif) {
+        memcpy(rtwvif->bssid, bssid, ETH_ALEN);
+        rtw_vif_port_config(rtwdev, rtwvif, PORT_SET_BSSID);
+        IOLog("rtw88: connect_hw_setup: BSSID written\n");
+    }
+
+    mutex_unlock(&rtwdev->mutex);
+}
+
 void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version)
 {
     if (version) *version = 0;
