@@ -548,36 +548,15 @@ void RTW88IEEE80211::handleInterrupt()
 
 UInt32 RTW88IEEE80211::outputPacket(mbuf_t m)
 {
-    if (_state != RTW88_STATE_CONNECTED || !_rtwdev || !_hw || !_vif)
-        goto drop;
-
-    {
-        struct sk_buff *skb = mbufToSkb(m);
-        if (!skb) goto drop;
-
-        /* Set up ieee80211_tx_info in skb->cb */
-        struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
-        memset(info, 0, sizeof(*info));
-        info->flags  = IEEE80211_TX_CTL_FIRST_FRAGMENT;
-        info->band   = NL80211_BAND_2GHZ; /* updated by channel */
-        info->control.vif = _vif;
-        info->control.sta = _sta;
-
-        /* Submit to rtw88 driver */
-        struct ieee80211_tx_control ctrl = { .sta = _sta };
-        if (_hw->ops && _hw->ops->tx)
-            _hw->ops->tx(_hw, &ctrl, skb);
-        else {
-            kfree_skb(skb);
-            goto drop;
-        }
-        mbuf_freem(m); /* driver now owns skb; free original mbuf */
-        return kIOReturnOutputSuccess;
+    /* Need an associated STA before data frames can be sent. */
+    if (_state != RTW88_STATE_CONNECTED || !_rtwdev || !_hw || !_vif || !_sta) {
+        mbuf_freem(m);
+        return kIOReturnOutputDropped;
     }
 
-drop:
-    mbuf_freem(m);
-    return kIOReturnOutputDropped;
+    /* txDataFrame() encapsulates the Ethernet frame as an 802.11 data frame
+     * and consumes (frees) the mbuf in all paths. */
+    return txDataFrame(m) ? kIOReturnOutputSuccess : kIOReturnOutputDropped;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1331,16 +1310,60 @@ bool RTW88IEEE80211::txMgmtFrame(const uint8_t *frame, uint32_t len)
 
 bool RTW88IEEE80211::txDataFrame(mbuf_t m)
 {
-    if (!_hw || !_hw->ops || !_hw->ops->tx || !_vif) {
+    if (!_hw || !_hw->ops || !_hw->ops->tx || !_vif || !_sta) {
         mbuf_freem(m);
         return false;
     }
-    struct sk_buff *skb = mbufToSkb(m);
+
+    /* The mbuf is an Ethernet frame: [DA(6)][SA(6)][ethertype(2)][payload].
+     * The rtw88 driver's tx op expects an 802.11 frame, so we must
+     * encapsulate: 802.11 data header (24) + LLC/SNAP (8) + IP payload.
+     * mac80211 normally does this; we are bypassing mac80211's tx path. */
+    size_t total = mbuf_pkthdr_len(m);
+    if (total < 14 || total > 2048) { mbuf_freem(m); return false; }
+    uint32_t paylen = (uint32_t)total - 14;
+
+    uint8_t eh[14];
+    if (mbuf_copydata(m, 0, 14, eh) != 0) { mbuf_freem(m); return false; }
+    uint16_t ethertype = (uint16_t)((eh[12] << 8) | eh[13]);
+
+    uint32_t framelen = 24 + 8 + paylen;
+    struct sk_buff *skb = alloc_skb(framelen + 128, GFP_ATOMIC);
     if (!skb) { mbuf_freem(m); return false; }
+    skb_reserve(skb, 128);  /* TX descriptor headroom */
+
+    /* 802.11 data header (ToDS: station -> AP) */
+    struct ieee80211_hdr_3addr *h =
+        (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
+    h->frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS);
+    h->duration_id   = 0;
+    memcpy(h->addr1, _targetBSS.bssid, 6); /* RA = BSSID (the AP)        */
+    memcpy(h->addr2, _macAddr, 6);         /* TA = SA  (us)              */
+    memcpy(h->addr3, eh, 6);               /* DA = Ethernet destination  */
+    h->seq_ctrl = 0;                        /* sequence assigned by hw    */
+
+    /* RFC 1042 LLC/SNAP header */
+    uint8_t *snap = skb_put(skb, 8);
+    snap[0] = 0xAA; snap[1] = 0xAA; snap[2] = 0x03;
+    snap[3] = 0x00; snap[4] = 0x00; snap[5] = 0x00;
+    snap[6] = (uint8_t)(ethertype >> 8);
+    snap[7] = (uint8_t)(ethertype & 0xff);
+
+    /* Payload (IP packet) copied straight from the Ethernet mbuf */
+    if (paylen) {
+        uint8_t *pay = (uint8_t *)skb_put(skb, paylen);
+        if (mbuf_copydata(m, 14, paylen, pay) != 0) {
+            kfree_skb(skb);
+            mbuf_freem(m);
+            return false;
+        }
+    }
 
     struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
     memset(info, 0, sizeof(*info));
-    info->flags  = IEEE80211_TX_CTL_FIRST_FRAGMENT;
+    info->flags = IEEE80211_TX_CTL_FIRST_FRAGMENT;
+    info->band  = (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ
+                                            : NL80211_BAND_2GHZ;
     info->control.vif = _vif;
     info->control.sta = _sta;
 
