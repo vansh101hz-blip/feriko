@@ -71,8 +71,10 @@ void rtw88_dev_printk(int level, struct device *dev, const char *fmt, ...)
     snprintf(ring_msg, sizeof(ring_msg), "[rtw88 %s %s] %s", ls, name, buf);
     rtw88_log_append(ring_msg);
     
-    /* Pause on errors so the message is readable before any subsequent crash */
-    if (level == KERN_ERR) IOSleep(2000);
+    /* Do NOT sleep here — IOSleep in a hot error path (e.g. "failed to write
+     * TX skb to HCI" called from the output queue) stalls the IOKit thread
+     * for 2 s per error, which both degrades throughput and makes subsequent
+     * errors compound by holding locks. */
 }
 
 void rtw88_hex_dump(const char *prefix, const void *buf, size_t len)

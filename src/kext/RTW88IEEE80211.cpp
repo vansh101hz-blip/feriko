@@ -1356,7 +1356,10 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     memcpy(h->addr1, _targetBSS.bssid, 6); /* RA = BSSID (the AP)        */
     memcpy(h->addr2, _macAddr, 6);         /* TA = SA  (us)              */
     memcpy(h->addr3, eh, 6);               /* DA = Ethernet destination  */
-    h->seq_ctrl = 0;                        /* sequence assigned by hw    */
+    /* Assign a sequence number; each data frame must have a unique seq to
+     * avoid the AP's duplicate-detection filter discarding subsequent frames.
+     * mac80211 would do this in the real stack; we must do it ourselves. */
+    h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
 
     /* RFC 1042 LLC/SNAP header */
     uint8_t *snap = skb_put(skb, 8);
