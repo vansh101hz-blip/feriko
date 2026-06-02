@@ -22,13 +22,40 @@ Feixiao aims to support the following Realtek chipsets:
 
 ## Build Instructions
 
-To build Feixiao from source, you will need the Xcode Command Line Tools and the macOS Kernel SDK.
+To build Feixiao from source, you will need the rtw88 driver from Linux kernel source,Xcode Command Line Tools and the macOS Kernel SDK.
 
 ```sh
 # Clone the repository
 git clone https://github.com/thegwchr/Feixiao.git
 cd Feixiao
+```
 
+Before building Feixiao, obtain the Linux `rtw88` driver source at tag `v7.0.10`:
+
+```sh
+mkdir rtw88-stable
+cd rtw88-stable
+git init
+git remote add origin \
+    https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+git config core.sparseCheckout true
+echo "drivers/net/wireless/realtek/rtw88/" >> .git/info/sparse-checkout
+git fetch --depth 1 origin tag v7.0.10
+git checkout v7.0.10
+```
+
+This clones only the `rtw88` subdirectory (~30MB) instead of the full kernel tree (~2GB). Directory structure must be:
+
+```
+parent/
+├── Feixiao/        # this repository
+└── rtw88-stable/   # Linux kernel tree root (driver at drivers/net/wireless/realtek/rtw88/)
+```
+
+If you name the clone differently, update `LINUX_SRC` in `Makefile` accordingly.
+
+
+```sh
 # Build the kext and control utility
 make all
 ```
@@ -76,8 +103,8 @@ If you encounter kernel panics or connection failures, ensure you are using the 
 
 ## Acknowledgements
 
-- **Realtek** for the original Linux `rtw88` driver source code and WLAN card.
-- **Apple** for the OS
-- **AcidAnthera** for MacKernelSDK
-- **OpenIntelWireless** for itlwm as reference
-- The Hackintosh community for their continued inspiration in macOS driver development.
+- **Realtek** for the original Linux `rtw88` driver source code and WLAN card;
+- **Apple** for the OS;
+- **AcidAnthera** for MacKernelSDK;
+- **OpenIntelWireless** for itlwm as reference;
+- **FreeBSD** for LinuxKPI as reference on how Linux drivers get implemented in BSD.
