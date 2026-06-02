@@ -1307,7 +1307,7 @@ bool RTW88IEEE80211::txMgmtFrame(const uint8_t *frame, uint32_t len)
 
     struct sk_buff *skb = alloc_skb(len + 64, GFP_ATOMIC);
     if (!skb) return false;
-    skb_reserve(skb, 32); /* headroom for TX descriptor */
+    skb_reserve(skb, 128); /* headroom for TX descriptor (48 B) + pkt_offset padding */
     skb_put_data(skb, frame, len);
 
     struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
@@ -1350,7 +1350,7 @@ struct sk_buff *RTW88IEEE80211::mbufToSkb(mbuf_t m)
     size_t total = mbuf_pkthdr_len(m);
     struct sk_buff *skb = alloc_skb((uint32_t)(total + 64), GFP_ATOMIC);
     if (!skb) return nullptr;
-    skb_reserve(skb, 32);
+    skb_reserve(skb, 128); /* headroom for TX descriptor (48 B) + pkt_offset padding */
 
     /* Copy contiguous mbuf chain data */
     mbuf_t cur = m;
