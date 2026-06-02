@@ -70,6 +70,9 @@ public:
 
     /* Called from RTW88IEEE80211 to deliver RX frames to macOS */
     void injectRxFrame(mbuf_t m);
+    /* Allocate an input mbuf via the IONetworkController allocator (sets
+     * m_len and pkthdr.len consistently — required for inputPacket). */
+    mbuf_t allocateInputPacket(uint32_t len);
 
     /* DMA helpers — used by Linux compat dma_alloc_coherent */
     void *allocCoherent(size_t size, IOPhysicalAddress *phys);

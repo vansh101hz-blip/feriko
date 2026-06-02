@@ -782,16 +782,15 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
     uint32_t paylen = skb->len - hdrlen - 8; /* strip LLC/SNAP */
     uint32_t ethlen = 14 + paylen;
 
-    /* Assemble the 14-byte Ethernet header into a small stack buffer, then
-     * copy header+payload into the mbuf with mbuf_copyback().  We must use
-     * copyback (not mbuf_data + memcpy): for large frames (A-MSDU can be
-     * several KB) mbuf_allocpacket() returns a multi-segment chain, and a
-     * raw memcpy of the whole packet into the first segment overflows the
-     * mbuf zone and corrupts the kernel heap. */
-    mbuf_t m = nullptr;
-    if (mbuf_allocpacket(MBUF_WAITOK, ethlen, nullptr, &m) != 0) {
-        kfree_skb(skb); return;
-    }
+    /* Allocate the input mbuf via IONetworkController::allocatePacket (through
+     * the parent) — NOT mbuf_allocpacket.  allocatePacket sets m_len and
+     * pkthdr.len consistently for every segment, which is what the dlil input
+     * validator requires; mbuf_allocpacket left m_len inconsistent and the
+     * kernel paniced with "Failed mbuf validity check: len -14".
+     * mbuf_copyback fills the data and is chain-safe (no heap overflow). */
+    if (!_parent) { kfree_skb(skb); return; }
+    mbuf_t m = _parent->allocateInputPacket(ethlen);
+    if (!m) { kfree_skb(skb); return; }
 
     uint8_t ehdr[14];
     /* DA = addr1 (recipient), SA = addr3 (original source via DS) */
@@ -806,12 +805,9 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
         kfree_skb(skb);
         return;
     }
-    /* Set pkthdr.len explicitly — see rtw88_make_packet_mbuf().  Without this
-     * ether_input() underflows it to -14 and the kernel panics. */
-    mbuf_pkthdr_setlen(m, ethlen);
 
     kfree_skb(skb);
-    if (_parent) _parent->injectRxFrame(m);
+    _parent->injectRxFrame(m);
 }
 
 /* ------------------------------------------------------------------ */

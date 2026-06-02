@@ -511,6 +511,16 @@ IOReturn RTW88PCIDevice::powerStateWillChangeTo(IOPMPowerFlags flags,
 /*  RX injection (called from RTW88IEEE80211 on frame receive)         */
 /* ------------------------------------------------------------------ */
 
+mbuf_t RTW88PCIDevice::allocateInputPacket(uint32_t len)
+{
+    /* IONetworkController::allocatePacket returns an mbuf set up exactly the
+     * way inputPacket() expects: m_len and m_pkthdr.len are both set and
+     * consistent across every segment of the chain.  Hand-rolling this with
+     * mbuf_allocpacket left m_len inconsistent with pkthdr.len, which the
+     * dlil input validator rejects with "Failed mbuf validity check: len -14". */
+    return allocatePacket(len);
+}
+
 void RTW88PCIDevice::injectRxFrame(mbuf_t m)
 {
     if (!_iface || !_enabled) {
@@ -519,20 +529,26 @@ void RTW88PCIDevice::injectRxFrame(mbuf_t m)
     }
 
     /* Last line of defense: never hand the networking stack a malformed
-     * packet.  An mbuf with pkthdr.len < 14 (or absurdly large) makes
-     * ether_input() underflow the length and panic the kernel with
-     * "Failed mbuf validity check: len -14".  Drop + log instead. */
+     * packet.  Validate BOTH length fields — the dlil validator panics on
+     * m_len (printed as "len"), not just pkthdr.len.  mbuf_len/mbuf_pkthdr_len
+     * return size_t, so a negative m_len shows up as a huge value here. */
     size_t plen = mbuf_pkthdr_len(m);
-    if (plen < 14 || plen > 4096) {
-        IOLog("rtw88: injectRxFrame: dropping bogus mbuf (pkthdr.len=%zu)\n", plen);
+    size_t mlen = mbuf_len(m);
+    if (plen < 14 || plen > 4096 || mlen < 14 || mlen > 4096) {
+        IOLog("rtw88: injectRxFrame: dropping bogus mbuf (pkthdr.len=%zu m_len=%zu)\n",
+              plen, mlen);
         freePacket(m);
         return;
     }
 
-    _iface->inputPacket(m);
-    if (_iface) {
-        IONetworkStats *stats = (IONetworkStats *)_iface->getNetworkData(
-            kIONetworkStatsKey)->getBuffer();
+    /* Queue + flush, matching the proven itlwm submission path.  Submitting
+     * via the input queue keeps frame delivery off whatever thread called us. */
+    _iface->inputPacket(m, 0, IONetworkInterface::kInputOptionQueuePacket);
+    _iface->flushInputQueue();
+
+    IONetworkData *nd = _iface->getNetworkData(kIONetworkStatsKey);
+    if (nd) {
+        IONetworkStats *stats = (IONetworkStats *)nd->getBuffer();
         if (stats) stats->inputPackets++;
     }
 }
