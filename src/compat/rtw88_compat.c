@@ -584,14 +584,83 @@ struct sk_buff *ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
                                           u32 link_id)
 { return NULL; }
 
+/*
+ * Build an 802.11 Null Function frame (subtype 0x4, type Data) addressed
+ * from STA to its AP.  Used by rtw88's reserved-page download so the
+ * firmware can keep-alive the association during LPS.
+ *
+ * The caller (rtw_fill_rsvd_page_desc) prepends chip->tx_pkt_desc_sz bytes
+ * via skb_push, so we must reserve headroom for that descriptor.
+ */
 struct sk_buff *ieee80211_nullfunc_get(struct ieee80211_hw *hw,
                                         struct ieee80211_vif *vif,
                                         int link_id, bool qos_ok)
-{ return NULL; }
+{
+    const u32 headroom = 64;   /* enough for any chip's tx_pkt_desc_sz */
+    u32 hdr_len = qos_ok ? 26 : 24;
+    struct sk_buff *skb;
 
+    if (!vif) return NULL;
+
+    skb = alloc_skb(headroom + hdr_len, GFP_ATOMIC);
+    if (!skb) return NULL;
+    skb_reserve(skb, headroom);
+
+    u8 *p = skb_put_zero(skb, hdr_len);
+    /* Frame Control: Data (type=2), Null (subtype=0x4 or 0xC for QoS-Null) */
+    u8 subtype = qos_ok ? 0xC : 0x4;
+    p[0] = (u8)((subtype << 4) | (2 << 2));   /* type=Data, subtype=Null */
+    p[1] = 0x01;                               /* ToDS=1, FromDS=0 */
+    /* Duration */
+    p[2] = 0; p[3] = 0;
+    /* Address 1 = BSSID (RA) */
+    memcpy(&p[4], vif->bss_conf.bssid, 6);
+    /* Address 2 = STA (TA = SA) */
+    memcpy(&p[10], vif->addr, 6);
+    /* Address 3 = BSSID (DA) */
+    memcpy(&p[16], vif->bss_conf.bssid, 6);
+    /* Sequence control = 0 */
+    p[22] = 0; p[23] = 0;
+    /* QoS Control (only for QoS-Null) */
+    if (qos_ok) { p[24] = 0; p[25] = 0; }
+
+    return skb;
+}
+
+/*
+ * Build an 802.11 PS-Poll frame.  16 bytes total:
+ *   FC(2) AID(2) BSSID(6) TA(6)
+ * AID is carried in the duration field with the top two bits set (the
+ * 802.11 "PS-Poll AID encoding").
+ */
 struct sk_buff *ieee80211_pspoll_get(struct ieee80211_hw *hw,
                                       struct ieee80211_vif *vif)
-{ return NULL; }
+{
+    const u32 headroom = 64;
+    const u32 frame_len = 16;
+    struct sk_buff *skb;
+
+    if (!vif) return NULL;
+
+    skb = alloc_skb(headroom + frame_len, GFP_ATOMIC);
+    if (!skb) return NULL;
+    skb_reserve(skb, headroom);
+
+    u8 *p = skb_put_zero(skb, frame_len);
+    /* FC: type=Control (1), subtype=PS-Poll (0xA) */
+    p[0] = (u8)((0xA << 4) | (1 << 2));    /* 0xA4 */
+    p[1] = 0x00;
+    /* AID with top two bits set (per 802.11) */
+    u16 aid = (u16)(vif->cfg.aid | 0xC000);
+    p[2] = (u8)(aid & 0xFF);
+    p[3] = (u8)(aid >> 8);
+    /* BSSID */
+    memcpy(&p[4], vif->bss_conf.bssid, 6);
+    /* TA = our STA address */
+    memcpy(&p[10], vif->addr, 6);
+
+    return skb;
+}
 
 struct sk_buff *ieee80211_probereq_get(struct ieee80211_hw *hw,
                                         const u8 *src_addr,
