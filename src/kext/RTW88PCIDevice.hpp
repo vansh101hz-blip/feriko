@@ -73,6 +73,10 @@ public:
     /* Called from interrupt handler */
     void handleInterrupt(IOInterruptEventSource *src, int count);
 
+    /* Resume a flow-control-stalled output queue once the IRQ bottom-half has
+     * freed BE ring slots.  Called via a C trampoline from the compat layer. */
+    void resumeTxIfStalled();
+
     /* Called from RTW88IEEE80211 to deliver RX frames to macOS */
     void injectRxFrame(mbuf_t m);
     /* Allocate an input mbuf via the IONetworkController allocator (sets
@@ -132,6 +136,11 @@ private:
     IOEthernetAddress       _macAddr;
     bool                    _enabled      = false;
     bool                    _initialized  = false;
+
+    /* TX flow control: set when outputPacket() stalls the gated queue because
+     * the BE ring is nearly full; cleared when the IRQ completion path frees
+     * slots and resumes the queue.  See createOutputQueue()/outputPacket(). */
+    volatile bool           _txStalled    = false;
 
     /* Linked-list of allocated DMA buffers for cleanup */
     struct DMAEntry {

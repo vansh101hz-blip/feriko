@@ -178,6 +178,14 @@ static struct rtw88_dma_alloc_ops _dma_ops = {
     .sync_single_for_device = compat_dma_sync_dev,
 };
 
+/* C-linkage trampoline registered with the compat layer; the IRQ bottom-half
+ * calls it after tx_isr to resume a flow-control-stalled output queue. */
+extern "C" void rtw88_tx_resume_trampoline(void)
+{
+    if (g_pci_dev_instance)
+        g_pci_dev_instance->resumeTxIfStalled();
+}
+
 /* ------------------------------------------------------------------ */
 /*  IOService lifecycle                                                 */
 /* ------------------------------------------------------------------ */
@@ -283,6 +291,9 @@ bool RTW88PCIDevice::start(IOService *provider)
     if (!attachDevice()) return false;
 
     _initialized = true;
+    /* Wire TX flow-control resume: fired from the IRQ bottom-half after tx_isr
+     * frees BE ring slots, so a stalled output queue gets re-serviced. */
+    rtw88_set_tx_resume_cb(rtw88_tx_resume_trampoline);
     if (_intrSrc) _intrSrc->enable();
 
     /* Debug: poll BE ring + HISR/HIMR every second. Logs distinguish chip
@@ -323,6 +334,10 @@ void RTW88PCIDevice::free()
 
 void RTW88PCIDevice::teardown()
 {
+    /* Stop the IRQ bottom-half from calling back into us before we tear down
+     * the output queue it services. */
+    rtw88_set_tx_resume_cb(nullptr);
+
     if (_enabled) disable(_iface);
     drainPendingFree();   /* release any bounce bufs deferred during TX ISR */
 
@@ -480,7 +495,32 @@ UInt32 RTW88PCIDevice::outputPacket(mbuf_t m, void *param)
         freePacket(m);
         return kIOReturnOutputDropped;
     }
+    /*
+     * Backpressure instead of dropping.  When the BE ring is nearly full,
+     * rtw_pci_tx_write_data() would return -ENOSPC and rtw_tx() would FREE the
+     * skb — silently dropping it.  Under a sustained transfer those dropped
+     * frames (TCP ACKs/data) stall the connection.  Returning
+     * kIOReturnOutputStall makes IOGatedOutputQueue hold this exact packet and
+     * stop dispatching; resumeTxIfStalled() (fired from the IRQ bottom-half
+     * after tx_isr frees slots) re-services the queue.  Threshold leaves
+     * headroom so rtw_tx never actually hits -ENOSPC.
+     */
+    if (rtw88_be_tx_avail() < 32) {
+        _txStalled = true;
+        return kIOReturnOutputStall;
+    }
     return _ieee80211->outputPacket(m);
+}
+
+void RTW88PCIDevice::resumeTxIfStalled()
+{
+    /* Runs on the IRQ bottom-half thread (no rtw88 locks held). Use async
+     * service so we never block on the output-queue gate from here. */
+    if (_txStalled && rtw88_be_tx_avail() >= 64) {
+        _txStalled = false;
+        if (_txQueue)
+            _txQueue->service(IOBasicOutputQueue::kServiceAsync);
+    }
 }
 
 IOReturn RTW88PCIDevice::getHardwareAddress(IOEthernetAddress *addr)

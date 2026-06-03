@@ -162,6 +162,13 @@ void rtw88_debug_dump_tx_state(void);
  * between rtw_pci_probe and the chip's start() op. See rtw88_compat.c. */
 void rtw88_force_wifi_only(void);
 
+/* TX flow control. rtw88_be_tx_avail() returns the BE ring's free-slot count
+ * so the output path can stall (backpressure) instead of dropping when full.
+ * rtw88_set_tx_resume_cb() registers a hook fired after each IRQ bottom-half
+ * (post tx_isr, no locks held) so the kext can resume a stalled queue. */
+unsigned int rtw88_be_tx_avail(void);
+void rtw88_set_tx_resume_cb(void (*cb)(void));
+
 /* Returns true while the driver's RTW_FLAG_SCANNING bit is set.
  * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
 bool rtw88_is_scanning(void);

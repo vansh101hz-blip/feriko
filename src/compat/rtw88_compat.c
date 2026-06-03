@@ -384,10 +384,29 @@ static struct ieee80211_vif *g_rtw88_vif = NULL;
 void rtw88_register_vif(struct ieee80211_vif *vif)   { g_rtw88_vif = vif; }
 void rtw88_unregister_vif(void)                       { g_rtw88_vif = NULL; }
 
+/* Kext-registered hook fired after the IRQ bottom-half (tx_isr) has run and
+ * freed TX descriptors.  Runs on the thread_call thread with no rtw88 locks
+ * held, so it can safely (async-)service a stalled output queue. */
+static void (*g_tx_resume_cb)(void) = NULL;
+void rtw88_set_tx_resume_cb(void (*cb)(void)) { g_tx_resume_cb = cb; }
+
 static void rtw88_irq_thread_wrapper(thread_call_param_t param0, thread_call_param_t param1)
 {
     if (g_irq_thread_fn && g_irq_dev_id)
         g_irq_thread_fn(0, g_irq_dev_id);
+
+    /* tx_isr has now advanced the ring read pointer and freed slots; let the
+     * kext resume TX if it had stalled the output queue for backpressure. */
+    if (g_tx_resume_cb)
+        g_tx_resume_cb();
+}
+
+/* BE-ring free-slot count for the kext flow-control decision. */
+extern u32 rtw88_be_ring_avail(struct rtw_dev *rtwdev);   /* pci.c */
+u32 rtw88_be_tx_avail(void)
+{
+    if (!g_irq_dev_id) return 0;
+    return rtw88_be_ring_avail((struct rtw_dev *)g_irq_dev_id);
 }
 
 int rtw88_devm_request_threaded_irq(struct device *dev, unsigned int irq,
