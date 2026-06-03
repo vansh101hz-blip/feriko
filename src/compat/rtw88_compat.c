@@ -927,6 +927,12 @@ void rtw88_compat_exit(void)
 #define RTW88_DBG_REG_TCR              0x0604  /* TX Configuration Reg */
 #define RTW88_DBG_REG_TXDMA_STATUS     0x0210  /* TX DMA status; bit2=PAGE_OVF */
 #define RTW88_DBG_REG_TXPKT_EMPTY      0x041A  /* per-queue TX FIFO empty bits */
+#define RTW88_DBG_REG_RXBD_IDX_MPDUQ   0x03B4  /* RX BD idx: hi16=hw_wp lo16=rp */
+
+/* Defined in pci.c — dumps the BE buffer descriptor at a ring slot. */
+extern void rtw88_get_be_bd(struct rtw_dev *rtwdev, u32 idx,
+                            u32 *dma0, u32 *dma1,
+                            u16 *bufsz0, u16 *bufsz1, u16 *psb0);
 #define RTW88_DBG_TRX_BD_IDX_MASK      0xFFF
 #define RTW88_DBG_IMR_BEDOK            (1u << 4)
 
@@ -983,15 +989,28 @@ void rtw88_debug_dump_tx_state(void)
     u32 sw_wp = 0, sw_rp = 0, qlen = 0;
     rtw88_get_be_ring_state(rtwdev, &sw_wp, &sw_rp, &qlen);
 
+    /* Dump the BE buffer descriptor the HW read pointer is parked on.
+     * If dma0/dma1 are zero or insane, the chip is stalled on a bad
+     * descriptor (our bounce-buffer bug); if they look valid the chip
+     * stopped fetching for another reason. */
+    u32 bd_dma0 = 0, bd_dma1 = 0; u16 bd_sz0 = 0, bd_sz1 = 0, bd_psb = 0;
+    rtw88_get_be_bd(rtwdev, hw_rp, &bd_dma0, &bd_dma1, &bd_sz0, &bd_sz1, &bd_psb);
+
+    /* RX BD index register: hi16 = HW write ptr, lo16 = read ptr. Lets us see
+     * whether RX DMA also froze (chip-wide stall) or only TX. */
+    u32 rxbd = rtw_read32(rtwdev, RTW88_DBG_REG_RXBD_IDX_MPDUQ);
+    u32 rx_hw_wp = (rxbd >> 16) & RTW88_DBG_TRX_BD_IDX_MASK;
+    u32 rx_rp    = rxbd & RTW88_DBG_TRX_BD_IDX_MASK;
+
     IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u sw_wp=%u sw_rp=%u qlen=%u "
-          "HIMR0=0x%08x HISR0=0x%08x HIMR1=0x%08x HISR1=0x%08x HISR3=0x%08x "
-          "TXPAUSE=0x%02x TXQ_CTRL=0x%08x TCR=0x%08x TXDMA_ST=0x%08x PKT_EMPTY=0x%04x "
-          "BEDOK_p=%d BEDOK_m=%d\n",
+          "TXDMA_ST=0x%08x PKT_EMPTY=0x%04x BD[rp]:dma0=0x%08x dma1=0x%08x "
+          "sz0=%u sz1=%u psb=0x%04x RX_rp=%u RX_hwwp=%u "
+          "HISR0=0x%08x HISR3=0x%08x BEDOK_p=%d\n",
           hw_wp, hw_rp, sw_wp, sw_rp, qlen,
-          himr0, hisr0, himr1, hisr1, hisr3,
-          txpause, txqctrl, tcr, txdma_st, pkt_empty,
-          (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0,
-          (himr0 & RTW88_DBG_IMR_BEDOK) ? 0 : 1);
+          txdma_st, pkt_empty, bd_dma0, bd_dma1, bd_sz0, bd_sz1, bd_psb,
+          rx_rp, rx_hw_wp,
+          hisr0, hisr3,
+          (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0);
 }
 
 bool rtw88_is_scanning(void)
