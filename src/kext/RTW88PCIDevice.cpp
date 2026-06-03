@@ -262,6 +262,14 @@ bool RTW88PCIDevice::start(IOService *provider)
         return false;
     }
 
+    /* Force-disable BT coexistence.  rtw_pci_probe (inside create()) has
+     * already run rtw_core_init which filled rtwdev->efuse.btcoex from
+     * the chip's eFuse — but the actual coex setup happens later in
+     * rtw_power_on (via _ieee80211->start() below).  Override now so the
+     * coex driver initialises with wifi_only=true and never enables the
+     * BT-side H2C/C2H exchange that appears to be wedging BE TX. */
+    rtw88_force_wifi_only();
+
     /* Run the full probe now so the MAC address is populated before
      * the Ethernet interface is attached.  enable() will call
      * rtw_core_start() to power on the hardware for TX/RX. */

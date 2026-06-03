@@ -158,6 +158,10 @@ void rtw88_reenable_interrupt(void);
  * kext's debug timer to diagnose TX freeze; see rtw88_compat.c. */
 void rtw88_debug_dump_tx_state(void);
 
+/* Force-disable BT coexistence by clearing efuse.btcoex. Must be called
+ * between rtw_pci_probe and the chip's start() op. See rtw88_compat.c. */
+void rtw88_force_wifi_only(void);
+
 /* Returns true while the driver's RTW_FLAG_SCANNING bit is set.
  * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
 bool rtw88_is_scanning(void);
