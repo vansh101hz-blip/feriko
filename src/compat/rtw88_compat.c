@@ -933,13 +933,17 @@ void rtw88_reenable_interrupt(void)
     }
 }
 
+extern void rtw88_get_be_ring_state(struct rtw_dev *rtwdev,
+    u32 *sw_wp, u32 *sw_rp, u32 *qlen);
+
 /*
  * Dump current chip-side TX state for the BE queue.  Used by the kext's
  * periodic debug timer to distinguish three failure modes when TX appears
- * stuck.  Pair with the per-TXISR DBG log (which prints SW wp/rp) to see:
- *   1) chip stopped: hw_rp frozen, last TXISR log shows sw_rp == hw_rp
- *   2) chip moves, no IRQ:  hw_rp increasing but no recent TXISR log
+ * stuck.  Now includes SW ring state for cross-checking:
+ *   1) chip stopped: hw_rp frozen, sw_rp == hw_rp, qlen > 0
+ *   2) chip moves, no IRQ:  hw_rp increasing but sw_rp lags
  *   3) IRQ pending but masked: BEDOK_pending=1 AND BEDOK_masked=1
+ *   4) ring desync: hw_rp > hw_wp (chip consumed more than submitted)
  */
 void rtw88_debug_dump_tx_state(void)
 {
@@ -960,11 +964,16 @@ void rtw88_debug_dump_tx_state(void)
     u32 hw_wp    = bd_idx & RTW88_DBG_TRX_BD_IDX_MASK;
     u32 hw_rp    = (bd_idx >> 16) & RTW88_DBG_TRX_BD_IDX_MASK;
 
-    IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u "
+    /* SW ring state from pci.c (can't include pci.h — path shadowing) */
+    u32 sw_wp = 0, sw_rp = 0, qlen = 0;
+    rtw88_get_be_ring_state(rtwdev, &sw_wp, &sw_rp, &qlen);
+
+    IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u sw_wp=%u sw_rp=%u qlen=%u "
           "HIMR0=0x%08x HISR0=0x%08x HIMR1=0x%08x HISR1=0x%08x HISR3=0x%08x "
           "TXPAUSE=0x%02x TXQ_CTRL=0x%08x TCR=0x%08x "
           "BEDOK_p=%d BEDOK_m=%d\n",
-          hw_wp, hw_rp, himr0, hisr0, himr1, hisr1, hisr3,
+          hw_wp, hw_rp, sw_wp, sw_rp, qlen,
+          himr0, hisr0, himr1, hisr1, hisr3,
           txpause, txqctrl, tcr,
           (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0,
           (himr0 & RTW88_DBG_IMR_BEDOK) ? 0 : 1);
