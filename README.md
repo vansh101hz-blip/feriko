@@ -30,21 +30,13 @@ git clone https://github.com/thegwchr/Feixiao.git
 cd Feixiao
 ```
 
-Before building Feixiao, obtain the Linux `rtw88` driver source at tag `v7.0.10`:
+Before building Feixiao, clone the Linux `rtw88` driver source from thegwchr/rtw88-stable:
 
 ```sh
-mkdir rtw88-stable
-cd rtw88-stable
-git init
-git remote add origin \
-    https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-git config core.sparseCheckout true
-echo "drivers/net/wireless/realtek/rtw88/" >> .git/info/sparse-checkout
-git fetch --depth 1 origin tag v7.0.10
-git checkout v7.0.10
+git clone https://github.com/thegwchr/rtw88-stable.git
 ```
 
-This clones only the `rtw88` subdirectory (~30MB) instead of the full kernel tree (~2GB). Directory structure must be:
+Directory structure must be:
 
 ```
 parent/
