@@ -51,6 +51,11 @@ public:
     IOReturn selectMedium(const IONetworkMedium *medium) override;
     bool     configureInterface(IONetworkInterface *iface) override;
     UInt32   outputPacket(mbuf_t m, void *param) override;
+    /* Provide a gated output queue so outputPacket() is serialized through the
+     * work loop.  Without this the stack calls outputPacket() concurrently,
+     * racing rtw_pci_tx_write_data's BD fill (which reads ring->r.wp before the
+     * irq_lock) and leaving a zeroed descriptor that stalls the TX DMA engine. */
+    IOOutputQueue *createOutputQueue() override;
 
     /* IOEthernetController */
     IOReturn getHardwareAddress(IOEthernetAddress *addr) override;

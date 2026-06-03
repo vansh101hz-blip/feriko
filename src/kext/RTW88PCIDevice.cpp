@@ -455,6 +455,24 @@ IOReturn RTW88PCIDevice::disable(IONetworkInterface *iface)
     return kIOReturnSuccess;
 }
 
+IOOutputQueue *RTW88PCIDevice::createOutputQueue()
+{
+    /*
+     * Without an output queue, IONetworkController delivers outputPacket()
+     * straight from the networking stack, which can call it concurrently from
+     * multiple threads.  rtw_pci_tx_write_data() computes the TX buffer-
+     * descriptor slot from ring->r.wp and fills it BEFORE taking irq_lock
+     * (only the wp increment is locked), so two concurrent submissions fill the
+     * same slot and skip the next, leaving a zeroed descriptor in the BE ring.
+     * The chip then stalls its TX DMA on that zero descriptor (HW rp frozen,
+     * FIFO empty) and the shared DMA wedges RX too.
+     *
+     * An IOGatedOutputQueue runs every outputPacket() under the work-loop gate,
+     * serializing submission so the ring fill is single-threaded.
+     */
+    return IOGatedOutputQueue::withTarget(this, getWorkLoop(), 256);
+}
+
 UInt32 RTW88PCIDevice::outputPacket(mbuf_t m, void *param)
 {
     drainPendingFree();
