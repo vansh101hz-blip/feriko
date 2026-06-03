@@ -1121,6 +1121,26 @@ void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
     rtw_chip_prepare_tx(rtwdev);
     IOLog("rtw88: connect_hw_setup: RF calibration done\n");
 
+    /*
+     * 5GHz data-path test: pin data frames to a fixed, robust OFDM rate.
+     *
+     * Management frames (auth/assoc) use a fixed 6M OFDM rate and succeed on
+     * 5GHz, but data frames use the firmware's rate adaptation / highest HT
+     * MCS.  With the watchdog (and the driver's rate-adaptation feedback) off,
+     * that path appears to leave 5GHz data on a rate the AP won't ACK — the
+     * association is real but DHCP never completes (slow wp/rp from retries).
+     * Force data onto the same proven-good fixed rate the mgmt frames use; if
+     * 5GHz throughput then works, rate selection was the culprit and we can
+     * tune the value up.  2.4GHz keeps normal (adaptive) rate selection.
+     */
+    if (hw->conf.chandef.chan &&
+        hw->conf.chandef.chan->band == NL80211_BAND_5GHZ) {
+        rtwdev->dm_info.fix_rate = DESC_RATE6M;   /* 6 Mbps OFDM, use_rate */
+        IOLog("rtw88: connect_hw_setup: 5GHz — pinning data TX to 6M OFDM\n");
+    } else {
+        rtwdev->dm_info.fix_rate = 0xFF;          /* U8_MAX = adaptive */
+    }
+
     mutex_unlock(&rtwdev->mutex);
 }
 
