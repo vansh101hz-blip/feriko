@@ -126,7 +126,7 @@ struct rtw88_usb_ops       *rtw88_usb_io_ops   = NULL;
  * the watchdog keeps rescheduling but performs no RF-dynamic work, to test
  * whether DPK/power-tracking is wedging BE TX.  Flip to false to restore
  * normal watchdog behaviour. */
-bool rtw88_disable_watchdog_work = true;
+bool rtw88_disable_watchdog_work = false;
 
 /* ------------------------------------------------------------------ */
 /*  Workqueue implementation (kernel threads + IOLock)                  */
