@@ -613,6 +613,19 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
 
     case 0x00B0: /* auth */
         if (_state == RTW88_STATE_AUTHENTICATING) {
+            /* Only accept an auth response actually sent by our target AP.
+             * Without this we'd treat any stray/stale auth frame as success,
+             * falsely "associating" while the AP never admitted us. */
+            struct ieee80211_hdr_3addr *h3 =
+                (struct ieee80211_hdr_3addr *)skb->data;
+            if (memcmp(h3->addr3, _targetBSS.bssid, 6) != 0) {
+                IOLog("rtw88: auth resp from %02x:%02x:%02x:%02x:%02x:%02x "
+                      "!= target BSSID — ignoring\n",
+                      h3->addr3[0], h3->addr3[1], h3->addr3[2],
+                      h3->addr3[3], h3->addr3[4], h3->addr3[5]);
+                kfree_skb(skb);
+                break;
+            }
             uint8_t *body = skb->data + sizeof(struct ieee80211_hdr_3addr);
             uint32_t body_len = skb->len - sizeof(struct ieee80211_hdr_3addr);
             /* auth body: algo(2), seq(2), status(2) */
@@ -1034,6 +1047,17 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
 {
     /* Assoc-resp body (after 24-byte 802.11 hdr):
      * capability(2), status(2), AID(2), [IEs...] */
+    /* Reject an assoc response that isn't from our target AP (see auth path). */
+    struct ieee80211_hdr_3addr *h3 = (struct ieee80211_hdr_3addr *)skb->data;
+    if (memcmp(h3->addr3, _targetBSS.bssid, 6) != 0) {
+        IOLog("rtw88: assoc resp from %02x:%02x:%02x:%02x:%02x:%02x "
+              "!= target BSSID — ignoring\n",
+              h3->addr3[0], h3->addr3[1], h3->addr3[2],
+              h3->addr3[3], h3->addr3[4], h3->addr3[5]);
+        kfree_skb(skb);
+        return;   /* stay in ASSOCIATING; timeout fires if no real response */
+    }
+
     const uint8_t *body    = skb->data + sizeof(struct ieee80211_hdr_3addr);
     uint32_t       bodylen = skb->len  - sizeof(struct ieee80211_hdr_3addr);
     kfree_skb(skb);
