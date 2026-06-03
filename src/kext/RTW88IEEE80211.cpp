@@ -694,6 +694,8 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
             bss->ssid_len = len;
         } else if (id == WLAN_EID_DS_PARAMS && len >= 1) {
             bss->channel = body[2];
+        } else if (id == WLAN_EID_HT_OPERATION && len >= 1 && bss->channel == 0) {
+            bss->channel = body[2];
         } else if (id == WLAN_EID_RSN) {
             bss->cipher = WLAN_CIPHER_SUITE_CCMP;
             bss->akm    = 0x000FAC02; /* PSK */
@@ -711,6 +713,16 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
     struct ieee80211_rx_status *rxs = IEEE80211_SKB_RXCB(skb);
     bss->rssi = rxs->signal;
     bss->freq = rxs->freq;
+    
+    if (bss->channel == 0 && bss->freq) {
+        int f = bss->freq;
+        if (f == 2484)
+            bss->channel = 14;
+        else if (f >= 2412 && f <= 2472)
+            bss->channel = (f - 2407) / 5;
+        else if (f >= 5000 && f <= 5900)
+            bss->channel = (f - 5000) / 5;
+    }
 
     /* Add to BSS list (deduplicate by BSSID) */
     IOLockLock(_bssLock);
