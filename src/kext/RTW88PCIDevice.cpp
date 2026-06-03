@@ -585,17 +585,24 @@ void *RTW88PCIDevice::allocCoherent(size_t size, IOPhysicalAddress *phys)
 
     if (phys) *phys = pa;
 
-    /* Track for cleanup */
-    IOSimpleLockLock(_dmaLock);
+    /* Allocate the tracking node OUTSIDE the spinlock — IOMallocZero is
+     * sleepable, and IOSimpleLock disables preemption.  Calling a sleepable
+     * allocator from a preemption-disabled context panics XNU with
+     * "blocking while holding a spinlock". */
     DMAEntry *entry = (DMAEntry *)IOMallocZero(sizeof(DMAEntry));
-    if (entry) {
-        entry->desc = desc;
-        entry->virt = va;
-        entry->phys = pa;
-        entry->size = size;
-        entry->next = _dmaList;
-        _dmaList = entry;
+    if (!entry) {
+        desc->complete();
+        desc->release();
+        return nullptr;
     }
+    entry->desc = desc;
+    entry->virt = va;
+    entry->phys = pa;
+    entry->size = size;
+
+    IOSimpleLockLock(_dmaLock);
+    entry->next = _dmaList;
+    _dmaList = entry;
     IOSimpleLockUnlock(_dmaLock);
 
     return va;
