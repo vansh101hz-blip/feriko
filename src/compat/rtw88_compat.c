@@ -925,6 +925,8 @@ void rtw88_compat_exit(void)
 #define RTW88_DBG_REG_TXPAUSE          0x0522  /* MAC-level AC queue pause */
 #define RTW88_DBG_REG_FWHW_TXQ_CTRL    0x0420  /* TXQ control / enable */
 #define RTW88_DBG_REG_TCR              0x0604  /* TX Configuration Reg */
+#define RTW88_DBG_REG_TXDMA_STATUS     0x0210  /* TX DMA status; bit2=PAGE_OVF */
+#define RTW88_DBG_REG_TXPKT_EMPTY      0x041A  /* per-queue TX FIFO empty bits */
 #define RTW88_DBG_TRX_BD_IDX_MASK      0xFFF
 #define RTW88_DBG_IMR_BEDOK            (1u << 4)
 
@@ -967,6 +969,13 @@ void rtw88_debug_dump_tx_state(void)
     u8  txpause  = rtw_read8(rtwdev, RTW88_DBG_REG_TXPAUSE);
     u32 txqctrl  = rtw_read32(rtwdev, RTW88_DBG_REG_FWHW_TXQ_CTRL);
     u32 tcr      = rtw_read32(rtwdev, RTW88_DBG_REG_TCR);
+    /* Distinguish "on-air TX stopped, FIFO full" from "DMA can't ingest":
+     *   txdma_st bit2 (PAGE_OVF) set or pkt_empty BE-bit clear => frames are
+     *   buffered in the chip FIFO and not radiating (FIFO backed up).
+     *   pkt_empty BE-bit set while rp stuck => FIFO drained, chip still won't
+     *   ingest the descriptor at rp => descriptor/DMA-read stall. */
+    u32 txdma_st = rtw_read32(rtwdev, RTW88_DBG_REG_TXDMA_STATUS);
+    u16 pkt_empty= rtw_read16(rtwdev, RTW88_DBG_REG_TXPKT_EMPTY);
     u32 hw_wp    = bd_idx & RTW88_DBG_TRX_BD_IDX_MASK;
     u32 hw_rp    = (bd_idx >> 16) & RTW88_DBG_TRX_BD_IDX_MASK;
 
@@ -976,11 +985,11 @@ void rtw88_debug_dump_tx_state(void)
 
     IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u sw_wp=%u sw_rp=%u qlen=%u "
           "HIMR0=0x%08x HISR0=0x%08x HIMR1=0x%08x HISR1=0x%08x HISR3=0x%08x "
-          "TXPAUSE=0x%02x TXQ_CTRL=0x%08x TCR=0x%08x "
+          "TXPAUSE=0x%02x TXQ_CTRL=0x%08x TCR=0x%08x TXDMA_ST=0x%08x PKT_EMPTY=0x%04x "
           "BEDOK_p=%d BEDOK_m=%d\n",
           hw_wp, hw_rp, sw_wp, sw_rp, qlen,
           himr0, hisr0, himr1, hisr1, hisr3,
-          txpause, txqctrl, tcr,
+          txpause, txqctrl, tcr, txdma_st, pkt_empty,
           (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0,
           (himr0 & RTW88_DBG_IMR_BEDOK) ? 0 : 1);
 }
