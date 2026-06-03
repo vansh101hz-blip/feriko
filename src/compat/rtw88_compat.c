@@ -101,10 +101,18 @@ int fls(unsigned int x)
     return x ? (32 - __builtin_clz(x)) : 0;
 }
 
-/* thread_call_cancel_wait IS exported by XNU as a KPI — the earlier comment
- * was wrong.  Let the real implementation run so we don't free a thread_call
- * that is still executing (which panics XNU 15 with "non-sleepable RW lock
- * with preemption enabled" inside the thread_call subsystem). */
+/* thread_call_cancel_wait is declared in kern/thread_call.h but is NOT
+ * exported as a kext KPI — the linker cannot resolve it externally.
+ * Provide a local definition so the symbol resolves at link time.
+ * We cancel any pending invocation and busy-wait briefly for any in-flight
+ * execution: timer callbacks are short-lived so a small IODelay suffices. */
+boolean_t thread_call_cancel_wait(thread_call_t call)
+{
+    if (!call) return false;
+    thread_call_cancel(call);
+    IODelay(500);   /* 500 µs: enough for a running callback to exit */
+    return thread_call_cancel(call);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Global DMA / PCI / USB ops pointers                                 */
