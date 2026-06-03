@@ -109,7 +109,7 @@ private:
     static void interruptOccurred(OSObject *owner,
                                    IOInterruptEventSource *src, int count);
 
-    static void debugTimerFired(OSObject *owner, IOTimerEventSource *src);
+    void debugTimerFired(IOTimerEventSource *src);
 
     IOPCIDevice            *_pciDev       = nullptr;
     IOMemoryMap            *_mmioMap      = nullptr;

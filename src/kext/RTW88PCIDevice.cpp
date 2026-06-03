@@ -292,7 +292,7 @@ bool RTW88PCIDevice::start(IOService *provider)
     return true;
 }
 
-void RTW88PCIDevice::debugTimerFired(OSObject *owner, IOTimerEventSource *src)
+void RTW88PCIDevice::debugTimerFired(IOTimerEventSource *src)
 {
     rtw88_debug_dump_tx_state();
     src->setTimeoutMS(1000);   /* re-arm */

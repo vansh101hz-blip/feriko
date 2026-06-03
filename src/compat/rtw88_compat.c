@@ -906,7 +906,15 @@ void rtw88_compat_exit(void)
 /* ------------------------------------------------------------------ */
 
 #include "main.h"
-#include "pci.h"
+
+/* We can't include rtw88's pci.h here because the compat tree's
+ * linux/pci.h shadows it on the include path.  Just hardcode the few
+ * register offsets and bits we need; they're stable in rtw88. */
+#define RTW88_DBG_RTK_PCI_HIMR0        0x0B0
+#define RTW88_DBG_RTK_PCI_HISR0        0x0B4
+#define RTW88_DBG_RTK_PCI_TXBD_IDX_BEQ 0x3A8
+#define RTW88_DBG_TRX_BD_IDX_MASK      0xFFF
+#define RTW88_DBG_IMR_BEDOK            (1u << 4)
 
 extern void rtw_pci_enable_interrupt(struct rtw_dev *rtwdev, struct rtw_pci *rtwpci, bool exclude_rx);
 
@@ -920,33 +928,29 @@ void rtw88_reenable_interrupt(void)
 }
 
 /*
- * Dump current TX ring + interrupt state for the BE queue.  Used by the
- * kext's periodic debug timer to distinguish three failure modes when
- * TX appears stuck:
- *   1) chip stopped processing: hw_rp == sw_rp == frozen
- *   2) chip running, no interrupts: hw_rp > sw_rp (chip moved on; we missed it)
- *   3) interrupts pending but masked: HISR0 & IMR_BEDOK, HIMR0 & IMR_BEDOK = 0
+ * Dump current chip-side TX state for the BE queue.  Used by the kext's
+ * periodic debug timer to distinguish three failure modes when TX appears
+ * stuck.  Pair with the per-TXISR DBG log (which prints SW wp/rp) to see:
+ *   1) chip stopped: hw_rp frozen, last TXISR log shows sw_rp == hw_rp
+ *   2) chip moves, no IRQ:  hw_rp increasing but no recent TXISR log
+ *   3) IRQ pending but masked: BEDOK_pending=1 AND BEDOK_masked=1
  */
 void rtw88_debug_dump_tx_state(void)
 {
     if (!g_irq_dev_id) return;
     struct rtw_dev *rtwdev = (struct rtw_dev *)g_irq_dev_id;
-    struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
-    struct rtw_pci_tx_ring *ring = &rtwpci->tx_rings[RTW_TX_QUEUE_BE];
 
-    u32 himr0  = rtw_read32(rtwdev, RTK_PCI_HIMR0);
-    u32 hisr0  = rtw_read32(rtwdev, RTK_PCI_HISR0);
-    u32 bd_idx = rtw_read32(rtwdev, RTK_PCI_TXBD_IDX_BEQ);
-    u32 hw_wp  = bd_idx & TRX_BD_IDX_MASK;
-    u32 hw_rp  = (bd_idx >> 16) & TRX_BD_IDX_MASK;
+    u32 himr0  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HIMR0);
+    u32 hisr0  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR0);
+    u32 bd_idx = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_TXBD_IDX_BEQ);
+    u32 hw_wp  = bd_idx & RTW88_DBG_TRX_BD_IDX_MASK;
+    u32 hw_rp  = (bd_idx >> 16) & RTW88_DBG_TRX_BD_IDX_MASK;
 
-    IOLog("rtw88: TXSTATE BE sw_wp=%u sw_rp=%u hw_wp=%u hw_rp=%u "
-          "HIMR0=0x%08x HISR0=0x%08x BEDOK_pending=%d BEDOK_masked=%d running=%d\n",
-          ring->r.wp, ring->r.rp, hw_wp, hw_rp,
-          himr0, hisr0,
-          (hisr0 & IMR_BEDOK) ? 1 : 0,
-          (himr0 & IMR_BEDOK) ? 0 : 1,
-          rtwpci->running ? 1 : 0);
+    IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u "
+          "HIMR0=0x%08x HISR0=0x%08x BEDOK_pending=%d BEDOK_masked=%d\n",
+          hw_wp, hw_rp, himr0, hisr0,
+          (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0,
+          (himr0 & RTW88_DBG_IMR_BEDOK) ? 0 : 1);
 }
 
 bool rtw88_is_scanning(void)
