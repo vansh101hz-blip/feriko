@@ -1054,6 +1054,26 @@ void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
         IOLog("rtw88: connect_hw_setup: BSSID written\n");
     }
 
+    /*
+     * Run RF calibration (IQK / DPK / GAPK) for the just-selected channel.
+     *
+     * The stock driver performs this in ieee80211_ops::mgd_prepare_tx() ->
+     * rtw_chip_prepare_tx(), guarded by rtwdev->need_rfk (which rtw_set_channel
+     * above just set).  This port bypasses mac80211, so mgd_prepare_tx() is
+     * never invoked and the calibration never ran — leaving the 8822C TX path
+     * uncalibrated.  Uncalibrated TX manages a handful of frames, then the
+     * signal degrades enough that the AP stops ACKing; the chip retries to
+     * exhaustion, on-air throughput collapses, the TX FIFO backs up and the
+     * BE ring's HW read pointer stalls (taking RX down with it on the shared
+     * MAC).  Consume need_rfk here so calibration actually happens before data
+     * frames flow.  We already hold rtwdev->mutex, matching rtw_ops_start_ap's
+     * calibration call site.
+     */
+    rtwdev->need_rfk = true;
+    IOLog("rtw88: connect_hw_setup: running RF calibration (IQK/DPK/GAPK)\n");
+    rtw_chip_prepare_tx(rtwdev);
+    IOLog("rtw88: connect_hw_setup: RF calibration done\n");
+
     mutex_unlock(&rtwdev->mutex);
 }
 
