@@ -458,6 +458,9 @@ IOReturn RTW88IEEE80211::start()
         if (_vif) {
             _vif->type = NL80211_IFTYPE_STATION;
             memcpy(_vif->addr, _macAddr, 6);
+            /* bss_conf.bssid must never be NULL — iterators dereference it
+             * for every RX frame even before association. */
+            _vif->bss_conf.bssid = _vif->bss_conf.bssid_buf;
             if (_hw->ops && _hw->ops->add_interface)
                 _hw->ops->add_interface(_hw, _vif);
             rtw88_register_vif(_vif);
@@ -1074,6 +1077,7 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
         bss->aid   = aid;
         bss->qos   = true;
         bss->bssid = bss->bssid_buf;
+        memcpy(bss->bssid_buf, _targetBSS.bssid, ETH_ALEN);
         _vif->cfg.assoc = true;
         _vif->cfg.aid   = aid;
         _hw->ops->bss_info_changed(_hw, _vif, bss,
