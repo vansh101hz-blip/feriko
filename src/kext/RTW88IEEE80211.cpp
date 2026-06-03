@@ -460,6 +460,7 @@ IOReturn RTW88IEEE80211::start()
             memcpy(_vif->addr, _macAddr, 6);
             if (_hw->ops && _hw->ops->add_interface)
                 _hw->ops->add_interface(_hw, _vif);
+            rtw88_register_vif(_vif);
         }
         RTW88_STAGE("add_interface done");
 
@@ -489,6 +490,7 @@ void RTW88IEEE80211::stop()
         if (_hw->ops->stop) {
             _hw->ops->stop(_hw, false);
         }
+        rtw88_unregister_vif();
         if (_hw->ops->remove_interface) {
             _hw->ops->remove_interface(_hw, _vif);
         }

@@ -170,4 +170,10 @@ void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
                              struct ieee80211_vif *vif,
                              const uint8_t *bssid);
 
+/* Register the single active VIF so ieee80211_iterate_active_interfaces*
+ * can call back into rtw88 internals (e.g. rtw_build_rsvd_page_iter for
+ * the firmware reserved-page download after association). */
+void rtw88_register_vif(struct ieee80211_vif *vif);
+void rtw88_unregister_vif(void);
+
 #endif /* _RTW88_COMPAT_H */

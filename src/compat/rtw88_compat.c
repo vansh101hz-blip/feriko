@@ -101,11 +101,10 @@ int fls(unsigned int x)
     return x ? (32 - __builtin_clz(x)) : 0;
 }
 
-/* thread_call_cancel_wait: not exported; cancel without waiting is safe here */
-int thread_call_cancel_wait(thread_call_t call)
-{
-    return thread_call_cancel(call);
-}
+/* thread_call_cancel_wait IS exported by XNU as a KPI — the earlier comment
+ * was wrong.  Let the real implementation run so we don't free a thread_call
+ * that is still executing (which panics XNU 15 with "non-sleepable RW lock
+ * with preemption enabled" inside the thread_call subsystem). */
 
 /* ------------------------------------------------------------------ */
 /*  Global DMA / PCI / USB ops pointers                                 */
@@ -363,6 +362,14 @@ irq_handler_t g_irq_thread_fn = NULL;
 void *g_irq_dev_id = NULL;
 thread_call_t g_irq_thread_call = NULL;
 
+/* Single active VIF — registered by the kext after add_interface so that
+ * ieee80211_iterate_active_interfaces_atomic can deliver the iterator to
+ * rtw88's internal callbacks (e.g. rtw_build_rsvd_page_iter). */
+static struct ieee80211_vif *g_rtw88_vif = NULL;
+
+void rtw88_register_vif(struct ieee80211_vif *vif)   { g_rtw88_vif = vif; }
+void rtw88_unregister_vif(void)                       { g_rtw88_vif = NULL; }
+
 static void rtw88_irq_thread_wrapper(thread_call_param_t param0, thread_call_param_t param1)
 {
     if (g_irq_thread_fn && g_irq_dev_id)
@@ -385,7 +392,8 @@ int rtw88_devm_request_threaded_irq(struct device *dev, unsigned int irq,
 void rtw88_devm_free_irq(struct device *dev, unsigned int irq, void *dev_id)
 {
     if (g_irq_thread_call) {
-        thread_call_cancel(g_irq_thread_call);
+        /* Use the blocking variant so we don't free while still executing */
+        thread_call_cancel_wait(g_irq_thread_call);
         thread_call_free(g_irq_thread_call);
         g_irq_thread_call = NULL;
     }
@@ -515,12 +523,20 @@ void ieee80211_cqm_rssi_notify(struct ieee80211_vif *vif,
 void ieee80211_iterate_active_interfaces_atomic(
     struct ieee80211_hw *hw, unsigned int iter_flags,
     void (*iterator)(void *data, u8 *mac, struct ieee80211_vif *vif),
-    void *data) {}
+    void *data)
+{
+    if (g_rtw88_vif && iterator)
+        iterator(data, g_rtw88_vif->addr, g_rtw88_vif);
+}
 
 void ieee80211_iterate_active_interfaces(
     struct ieee80211_hw *hw, unsigned int iter_flags,
     void (*iterator)(void *data, u8 *mac, struct ieee80211_vif *vif),
-    void *data) {}
+    void *data)
+{
+    if (g_rtw88_vif && iterator)
+        iterator(data, g_rtw88_vif->addr, g_rtw88_vif);
+}
 
 void ieee80211_iterate_stations_atomic(
     struct ieee80211_hw *hw,
