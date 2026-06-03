@@ -988,6 +988,12 @@ void RTW88IEEE80211::doAuthenticate()
         for (int j = 0; j < band->n_channels; j++) {
             if (band->channels[j].hw_value == _targetBSS.channel) {
                 chan = &band->channels[j];
+                /* The channel tables omit the per-channel .band field (Linux
+                 * fills it in at wiphy_register, which we don't run), so 5GHz
+                 * channels otherwise report band 0 == 2GHz.  Backfill it from
+                 * the parent band so chandef.chan->band and rx_status->band
+                 * are correct. */
+                chan->band = band->band;
                 break;
             }
         }
