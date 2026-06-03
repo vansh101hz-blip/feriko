@@ -216,6 +216,7 @@ $(OUT_KEXT_BIN): $(ALL_OBJS) | $(OUT_KEXT)/Contents/MacOS
 	@echo "  SYNC $(OUT_KEXT)"
 	rsync -a --exclude='MacOS' $(KEXT_SKEL)/ $(OUT_KEXT)/
 	@echo "  NOTE  run 'sudo chown -R root:wheel $(OUT_KEXT)' for kextutil"
+	@echo "  KEXT $$(dwarfdump --uuid $(OUT_KEXT_BIN) 2>/dev/null)"
 	@echo "  OK   build/out/rtw88.kext"
 
 # Compile Linux driver C files with compat headers
