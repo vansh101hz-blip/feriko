@@ -912,6 +912,9 @@ void rtw88_compat_exit(void)
  * register offsets and bits we need; they're stable in rtw88. */
 #define RTW88_DBG_RTK_PCI_HIMR0        0x0B0
 #define RTW88_DBG_RTK_PCI_HISR0        0x0B4
+#define RTW88_DBG_RTK_PCI_HIMR1        0x0B8
+#define RTW88_DBG_RTK_PCI_HISR1        0x0BC
+#define RTW88_DBG_RTK_PCI_HISR3        0x10BC  /* 3081-wcpu (8822C) only */
 #define RTW88_DBG_RTK_PCI_TXBD_IDX_BEQ 0x3A8
 #define RTW88_DBG_TRX_BD_IDX_MASK      0xFFF
 #define RTW88_DBG_IMR_BEDOK            (1u << 4)
@@ -942,13 +945,17 @@ void rtw88_debug_dump_tx_state(void)
 
     u32 himr0  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HIMR0);
     u32 hisr0  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR0);
+    u32 himr1  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HIMR1);
+    u32 hisr1  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR1);
+    u32 hisr3  = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR3);
     u32 bd_idx = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_TXBD_IDX_BEQ);
     u32 hw_wp  = bd_idx & RTW88_DBG_TRX_BD_IDX_MASK;
     u32 hw_rp  = (bd_idx >> 16) & RTW88_DBG_TRX_BD_IDX_MASK;
 
     IOLog("rtw88: TXSTATE BE hw_wp=%u hw_rp=%u "
-          "HIMR0=0x%08x HISR0=0x%08x BEDOK_pending=%d BEDOK_masked=%d\n",
-          hw_wp, hw_rp, himr0, hisr0,
+          "HIMR0=0x%08x HISR0=0x%08x HIMR1=0x%08x HISR1=0x%08x HISR3=0x%08x "
+          "BEDOK_p=%d BEDOK_m=%d\n",
+          hw_wp, hw_rp, himr0, hisr0, himr1, hisr1, hisr3,
           (hisr0 & RTW88_DBG_IMR_BEDOK) ? 1 : 0,
           (himr0 & RTW88_DBG_IMR_BEDOK) ? 0 : 1);
 }
