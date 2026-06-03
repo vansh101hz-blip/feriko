@@ -276,9 +276,26 @@ bool RTW88PCIDevice::start(IOService *provider)
 
     _initialized = true;
     if (_intrSrc) _intrSrc->enable();
+
+    /* Debug: poll BE ring + HISR/HIMR every second. Logs distinguish chip
+     * stop vs interrupt loss vs IMR masking when TX appears stuck. */
+    _debugTimer = IOTimerEventSource::timerEventSource(
+        this, OSMemberFunctionCast(IOTimerEventSource::Action,
+                                   this, &RTW88PCIDevice::debugTimerFired));
+    if (_debugTimer) {
+        _workLoop->addEventSource(_debugTimer);
+        _debugTimer->setTimeoutMS(1000);
+    }
+
     IOLog("rtw88: device started successfully\n");
     registerService();   /* publish IOKit port for IOServiceOpen / rtw88ctl */
     return true;
+}
+
+void RTW88PCIDevice::debugTimerFired(OSObject *owner, IOTimerEventSource *src)
+{
+    rtw88_debug_dump_tx_state();
+    src->setTimeoutMS(1000);   /* re-arm */
 }
 
 void RTW88PCIDevice::stop(IOService *provider)
@@ -305,6 +322,7 @@ void RTW88PCIDevice::teardown()
 
     if (_ieee80211)  { _ieee80211->stop(); _ieee80211->release(); _ieee80211 = nullptr; }
 
+    if (_debugTimer) { _debugTimer->cancelTimeout(); _workLoop->removeEventSource(_debugTimer); _debugTimer->release(); _debugTimer = nullptr; }
     if (_intrSrc)  { _workLoop->removeEventSource(_intrSrc); _intrSrc->release();  _intrSrc = nullptr; }
     if (_cmdGate)  { _workLoop->removeEventSource(_cmdGate); _cmdGate->release();  _cmdGate = nullptr; }
     if (_txQueue)  { _txQueue->release();   _txQueue = nullptr; }

@@ -109,12 +109,15 @@ private:
     static void interruptOccurred(OSObject *owner,
                                    IOInterruptEventSource *src, int count);
 
+    static void debugTimerFired(OSObject *owner, IOTimerEventSource *src);
+
     IOPCIDevice            *_pciDev       = nullptr;
     IOMemoryMap            *_mmioMap      = nullptr;
     volatile void          *_mmioBase     = nullptr;
     IOWorkLoop             *_workLoop     = nullptr;
     IOCommandGate          *_cmdGate      = nullptr;
     IOInterruptEventSource *_intrSrc      = nullptr;
+    IOTimerEventSource     *_debugTimer   = nullptr;
     IOEthernetInterface    *_iface        = nullptr;
     IOGatedOutputQueue     *_txQueue      = nullptr;
 

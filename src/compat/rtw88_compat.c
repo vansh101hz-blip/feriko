@@ -906,6 +906,7 @@ void rtw88_compat_exit(void)
 /* ------------------------------------------------------------------ */
 
 #include "main.h"
+#include "pci.h"
 
 extern void rtw_pci_enable_interrupt(struct rtw_dev *rtwdev, struct rtw_pci *rtwpci, bool exclude_rx);
 
@@ -916,6 +917,36 @@ void rtw88_reenable_interrupt(void)
         struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
         rtw_pci_enable_interrupt(rtwdev, rtwpci, false);
     }
+}
+
+/*
+ * Dump current TX ring + interrupt state for the BE queue.  Used by the
+ * kext's periodic debug timer to distinguish three failure modes when
+ * TX appears stuck:
+ *   1) chip stopped processing: hw_rp == sw_rp == frozen
+ *   2) chip running, no interrupts: hw_rp > sw_rp (chip moved on; we missed it)
+ *   3) interrupts pending but masked: HISR0 & IMR_BEDOK, HIMR0 & IMR_BEDOK = 0
+ */
+void rtw88_debug_dump_tx_state(void)
+{
+    if (!g_irq_dev_id) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)g_irq_dev_id;
+    struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
+    struct rtw_pci_tx_ring *ring = &rtwpci->tx_rings[RTW_TX_QUEUE_BE];
+
+    u32 himr0  = rtw_read32(rtwdev, RTK_PCI_HIMR0);
+    u32 hisr0  = rtw_read32(rtwdev, RTK_PCI_HISR0);
+    u32 bd_idx = rtw_read32(rtwdev, RTK_PCI_TXBD_IDX_BEQ);
+    u32 hw_wp  = bd_idx & TRX_BD_IDX_MASK;
+    u32 hw_rp  = (bd_idx >> 16) & TRX_BD_IDX_MASK;
+
+    IOLog("rtw88: TXSTATE BE sw_wp=%u sw_rp=%u hw_wp=%u hw_rp=%u "
+          "HIMR0=0x%08x HISR0=0x%08x BEDOK_pending=%d BEDOK_masked=%d running=%d\n",
+          ring->r.wp, ring->r.rp, hw_wp, hw_rp,
+          himr0, hisr0,
+          (hisr0 & IMR_BEDOK) ? 1 : 0,
+          (himr0 & IMR_BEDOK) ? 0 : 1,
+          rtwpci->running ? 1 : 0);
 }
 
 bool rtw88_is_scanning(void)

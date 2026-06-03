@@ -154,6 +154,10 @@ uint32_t rtw88_read_log(char *out_buf, uint32_t max_len);
 
 void rtw88_reenable_interrupt(void);
 
+/* Dump BE TX ring + interrupt state to IOLog. Called periodically by the
+ * kext's debug timer to diagnose TX freeze; see rtw88_compat.c. */
+void rtw88_debug_dump_tx_state(void);
+
 /* Returns true while the driver's RTW_FLAG_SCANNING bit is set.
  * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
 bool rtw88_is_scanning(void);
