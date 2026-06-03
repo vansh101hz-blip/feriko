@@ -186,8 +186,9 @@ bool RTW88PCIDevice::init(OSDictionary *props)
 {
     IOLog("rtw88: RTW88PCIDevice::init\n");
     if (!super::init(props)) return false;
-    _dmaLock = IOSimpleLockAlloc();
-    return _dmaLock != nullptr;
+    _dmaLock        = IOSimpleLockAlloc();
+    _pendingFreeLock = IOSimpleLockAlloc();
+    return _dmaLock != nullptr && _pendingFreeLock != nullptr;
 }
 
 bool RTW88PCIDevice::start(IOService *provider)
@@ -290,13 +291,15 @@ void RTW88PCIDevice::stop(IOService *provider)
 void RTW88PCIDevice::free()
 {
     if (_compatPciDev) { IOFree(_compatPciDev, sizeof(*_compatPciDev)); _compatPciDev = nullptr; }
-    if (_dmaLock)      { IOSimpleLockFree(_dmaLock); _dmaLock = nullptr; }
+    if (_pendingFreeLock) { drainPendingFree(); IOSimpleLockFree(_pendingFreeLock); _pendingFreeLock = nullptr; }
+    if (_dmaLock)         { IOSimpleLockFree(_dmaLock);        _dmaLock        = nullptr; }
     super::free();
 }
 
 void RTW88PCIDevice::teardown()
 {
     if (_enabled) disable(_iface);
+    drainPendingFree();   /* release any bounce bufs deferred during TX ISR */
 
     rtw88_compat_exit();
 
@@ -428,6 +431,7 @@ IOReturn RTW88PCIDevice::disable(IONetworkInterface *iface)
 
 UInt32 RTW88PCIDevice::outputPacket(mbuf_t m, void *param)
 {
+    drainPendingFree();
     if (!_enabled || !_ieee80211) {
         freePacket(m);
         return kIOReturnOutputDropped;
@@ -523,6 +527,7 @@ mbuf_t RTW88PCIDevice::allocateInputPacket(uint32_t len)
 
 void RTW88PCIDevice::injectRxFrame(mbuf_t m)
 {
+    drainPendingFree();
     if (!_iface || !_enabled) {
         freePacket(m);
         return;
@@ -607,8 +612,13 @@ void RTW88PCIDevice::freeCoherent(size_t size, void *virt, IOPhysicalAddress phy
             if (preemption_enabled()) {
                 e->desc->complete();
                 e->desc->release();
+                IOFree(e, sizeof(*e));
+            } else {
+                IOSimpleLockLock(_pendingFreeLock);
+                e->next = _dmaPendingFree;
+                _dmaPendingFree = e;
+                IOSimpleLockUnlock(_pendingFreeLock);
             }
-            IOFree(e, sizeof(*e));
             return;
         }
         prev = &e->next;
@@ -628,13 +638,35 @@ void RTW88PCIDevice::freeCoherentByPhys(IOPhysicalAddress phys)
             if (preemption_enabled()) {
                 e->desc->complete();
                 e->desc->release();
+                IOFree(e, sizeof(*e));
+            } else {
+                IOSimpleLockLock(_pendingFreeLock);
+                e->next = _dmaPendingFree;
+                _dmaPendingFree = e;
+                IOSimpleLockUnlock(_pendingFreeLock);
             }
-            IOFree(e, sizeof(*e));
             return;
         }
         prev = &e->next;
     }
     IOSimpleLockUnlock(_dmaLock);
+}
+
+void RTW88PCIDevice::drainPendingFree()
+{
+    if (!_pendingFreeLock) return;
+    IOSimpleLockLock(_pendingFreeLock);
+    DMAEntry *list      = _dmaPendingFree;
+    _dmaPendingFree     = nullptr;
+    IOSimpleLockUnlock(_pendingFreeLock);
+
+    for (DMAEntry *e = list; e; ) {
+        DMAEntry *next = e->next;
+        e->desc->complete();
+        e->desc->release();
+        IOFree(e, sizeof(*e));
+        e = next;
+    }
 }
 
 void RTW88PCIDevice::setBounceOrigVA(IOPhysicalAddress phys, void *orig_va)

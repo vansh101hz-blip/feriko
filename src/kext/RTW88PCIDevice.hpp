@@ -134,8 +134,15 @@ private:
         void    *orig_va;     /* original CPU VA for bounce mappings (NULL=coherent) */
         DMAEntry *next;
     };
-    DMAEntry *_dmaList = nullptr;
-    IOSimpleLock *_dmaLock = nullptr;
+    DMAEntry *_dmaList        = nullptr;
+    IOSimpleLock *_dmaLock    = nullptr;
+
+    /* Entries whose desc->complete()/release() was deferred because
+     * preemption was disabled at free time (TX-completion interrupt path).
+     * Drained by drainPendingFree() from preemption-enabled contexts. */
+    DMAEntry     *_dmaPendingFree    = nullptr;
+    IOSimpleLock *_pendingFreeLock   = nullptr;
+    void          drainPendingFree();
 
     /* Back-pointer passed to compat layer */
     struct pci_dev *_compatPciDev = nullptr;
