@@ -952,8 +952,9 @@ void rtw88_debug_dump_tx_state(void)
     u32 hisr1    = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR1);
     u32 hisr3    = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_HISR3);
     u32 bd_idx   = rtw_read32(rtwdev, RTW88_DBG_RTK_PCI_TXBD_IDX_BEQ);
-    /* TXPAUSE is 1 byte; TXQ_CTRL is 4 bytes; TCR is 4 bytes */
-    u8  txpause  = (u8)(rtw_read32(rtwdev, RTW88_DBG_REG_TXPAUSE) & 0xff);
+    /* REG_TXPAUSE is 1 byte at 0x0522 — UNALIGNED for 32-bit read.
+     * Must use rtw_read8 or we get neighbouring-register noise. */
+    u8  txpause  = rtw_read8(rtwdev, RTW88_DBG_REG_TXPAUSE);
     u32 txqctrl  = rtw_read32(rtwdev, RTW88_DBG_REG_FWHW_TXQ_CTRL);
     u32 tcr      = rtw_read32(rtwdev, RTW88_DBG_REG_TCR);
     u32 hw_wp    = bd_idx & RTW88_DBG_TRX_BD_IDX_MASK;
