@@ -1093,20 +1093,14 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
             _sta->aid  = aid;
             _sta->wme  = false;
 
-            /* Populate supported rates + HT caps so rtw_update_sta_info()
-             * builds a non-empty rate-adaptation mask.  Without this the
-             * firmware has no valid TX rate for UNICAST frames and they stall
-             * in the TX ring -> "failed to write TX skb to HCI".  Broadcast
-             * (e.g. DHCP) still works because it uses a fixed basic rate. */
+            /* Populate supported rates so rtw_update_sta_info() builds a
+             * non-empty rate-adaptation mask.  Keep HT/VHT disabled here:
+             * buildAssocReq() currently sends a legacy association request,
+             * so advertising HT MCS to the firmware would make it transmit
+             * data rates the AP has not accepted for this association. */
             _sta->deflink.supp_rates[NL80211_BAND_2GHZ] = 0xFFF; /* CCK+OFDM */
             _sta->deflink.supp_rates[NL80211_BAND_5GHZ] = 0xFF;  /* OFDM     */
             _sta->deflink.bandwidth = IEEE80211_STA_RX_BW_20;
-            _sta->deflink.ht_cap.ht_supported  = true;
-            _sta->deflink.ht_cap.cap           = 0x0020; /* HT_CAP_SGI_20 */
-            _sta->deflink.ht_cap.ampdu_factor  = 3;      /* 64 KB */
-            _sta->deflink.ht_cap.ampdu_density = 0;
-            _sta->deflink.ht_cap.mcs.rx_mask[0] = 0xFF;  /* MCS 0-7  (1SS) */
-            _sta->deflink.ht_cap.mcs.rx_mask[1] = 0xFF;  /* MCS 8-15 (2SS) */
 
             _hw->ops->sta_add(_hw, _vif, _sta);
         }
@@ -1183,12 +1177,32 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
     memcpy(body + 2, _targetBSS.ssid, _targetBSS.ssid_len);
     body += 2 + _targetBSS.ssid_len;
 
-    /* Supported rates: 1,2,5.5,11,6,9,12,18 Mbps */
-    static const uint8_t rates[] = { 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24 };
+    /* Supported rates. */
+    static const uint8_t rates_2g[] = {
+        0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24
+    };
+    static const uint8_t rates_5g[] = {
+        0x8c, 0x12, 0x98, 0x24, 0x30, 0x48, 0x60, 0x6c
+    };
+    static const uint8_t ext_rates_2g[] = {
+        0x30, 0x48, 0x60, 0x6c
+    };
+    const uint8_t *rates =
+        (_targetBSS.channel > 14) ? rates_5g : rates_2g;
+    uint8_t rates_len =
+        (_targetBSS.channel > 14) ? sizeof(rates_5g) : sizeof(rates_2g);
+
     body[0] = WLAN_EID_SUPP_RATES;
-    body[1] = sizeof(rates);
-    memcpy(body + 2, rates, sizeof(rates));
-    body += 2 + sizeof(rates);
+    body[1] = rates_len;
+    memcpy(body + 2, rates, rates_len);
+    body += 2 + rates_len;
+
+    if (_targetBSS.channel <= 14) {
+        body[0] = WLAN_EID_EXT_SUPP_RATES;
+        body[1] = sizeof(ext_rates_2g);
+        memcpy(body + 2, ext_rates_2g, sizeof(ext_rates_2g));
+        body += 2 + sizeof(ext_rates_2g);
+    }
 
     /* Copy RSN IE from beacon if WPA2 */
     if (_wpa2) {
