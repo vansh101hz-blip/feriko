@@ -1,0 +1,54 @@
+name: Build Feixiao
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target:
+          - name: RTL8822BE
+            fw_file: rtw8822b_fw.bin
+          - name: RTL8822CE
+            fw_file: rtw8822c_fw.bin
+          - name: RTL8821CE
+            fw_file: rtw8821c_fw.bin
+          - name: RTL8821AE
+            fw_file: rtw8821a_fw.bin
+          - name: RTL8814AE
+            fw_file: rtw8814a_fw.bin
+          - name: RTL8812AE
+            fw_file: rtw8812a_fw.bin
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Feixiao
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: Feixiao
+
+      - name: Clone rtw88-stable
+        run: git clone --depth 1 https://github.com/thegwchr/rtw88-stable.git
+
+      - name: Download firmware for ${{ matrix.target.name }}
+        run: curl -L -o Feixiao/firmware/${{ matrix.target.fw_file }} https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtw88/${{ matrix.target.fw_file }}
+
+      - name: Build kext and ctl
+        run: make all
+        working-directory: Feixiao
+
+      - name: Get kext UUID
+        id: uuid
+        run: echo "uuid=$(dwarfdump --uuid ./build/out/rtw88.kext/Contents/MacOS/rtw88 | awk '{print $2}')" >> $GITHUB_OUTPUT
+        working-directory: Feixiao
+
+      - name: Upload kext artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.name }}_${{ steps.uuid.outputs.uuid }}
+          path: Feixiao/build/out/

@@ -28,6 +28,7 @@ To build Feixiao from source, you will need the rtw88 driver from Linux kernel s
 # Clone the repository
 git clone https://github.com/thegwchr/Feixiao.git
 cd Feixiao
+git submodule update --recursive
 ```
 
 Before building Feixiao, clone the Linux `rtw88` driver source from thegwchr/rtw88-stable:
