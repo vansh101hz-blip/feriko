@@ -2,6 +2,11 @@ name: Release Feixiao
 
 on:
   workflow_dispatch:
+    inputs:
+      changelog:
+        description: Change log
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -85,5 +90,5 @@ print(f'new={new}')
           tag_name: v${{ steps.version.outputs.new }}
           name: Feixiao v${{ steps.version.outputs.new }}
           body: |
-            Automated release by Feixiao CI.
+            ${{ inputs.changelog }}
           files: ${{ runner.temp }}/Feixiao_v${{ steps.version.outputs.new }}_${{ steps.ids.outputs.uuid }}.zip
