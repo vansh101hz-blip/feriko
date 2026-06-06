@@ -39,7 +39,7 @@ jobs:
         id: version
         run: |
           cd Feixiao
-          python3 -c "
+          python3 << 'EOF' >> $GITHUB_OUTPUT
 import re, sys
 with open('rtw88.kext/Contents/Info.plist', 'r') as f:
     text = f.read()
@@ -55,7 +55,7 @@ with open('rtw88.kext/Contents/Info.plist', 'w') as f:
     f.write(text)
 print(f'old={old}')
 print(f'new={new}')
-" >> $GITHUB_OUTPUT
+EOF
 
       - name: Commit, tag, and push
         run: |
