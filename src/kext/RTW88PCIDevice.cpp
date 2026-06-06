@@ -217,6 +217,9 @@ void RTW88PCIDevice::publishHardwareIdentity()
 {
     const char *chip = chipDisplayName();
 
+    if (_ieee80211)
+        _ieee80211->getMACAddress(_macAddr.bytes);
+
     setName(chip);
     setProperty(kIOVendor, "Realtek");
     setProperty(kIOModel, chip);
