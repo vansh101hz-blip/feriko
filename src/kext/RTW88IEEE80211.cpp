@@ -1396,8 +1396,11 @@ IOReturn RTW88IEEE80211::cmdScan()
         _manualScanOnHomeChannel = false;
         _rxFrameCount = 0;
 
-        IOLog("rtw88: scan offload unavailable, using passive channel scan (%d channels)\n",
-              n_chans);
+        if (!_manualScanFallbackLogged) {
+            IOLog("rtw88: scan offload unavailable, using passive channel scan (%d channels)\n",
+                  n_chans);
+            _manualScanFallbackLogged = true;
+        }
         thread_call_enter(_manualScanTC);
 
         _timeoutMs = (_scanReturnState == RTW88_STATE_CONNECTED) ?

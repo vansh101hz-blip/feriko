@@ -178,6 +178,7 @@ private:
     uint32_t            _manualScanChannelCount = 0;
     volatile bool       _manualScanAbort = false;
     volatile bool       _manualScanOnHomeChannel = false;
+    bool                _manualScanFallbackLogged = false;
 
     /* Target BSS for connection */
     RTW88BSS            _targetBSS    = {};
