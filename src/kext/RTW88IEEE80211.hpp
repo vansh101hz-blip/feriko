@@ -24,6 +24,7 @@ struct pci_dev;
 struct ieee80211_hw;
 struct ieee80211_vif;
 struct ieee80211_sta;
+struct ieee80211_channel;
 struct sk_buff;
 
 class RTW88PCIDevice;
@@ -107,6 +108,7 @@ private:
     void      doHandshake(const uint8_t *eapol, uint32_t len);
     void      doDisconnect();
     void      clearKeys();
+    void      releaseSta();
     bool      installKey(struct ieee80211_key_conf **slot, bool pairwise,
                          uint8_t keyidx, const uint8_t *tk, uint8_t tk_len);
 
@@ -138,12 +140,18 @@ private:
     static void connectTCFn(thread_call_param_t self, thread_call_param_t);
     thread_call_t _connectTC = nullptr;
 
+    /* Manual passive scan fallback for chips/firmware without scan offload */
+    static void manualScanTCFn(thread_call_param_t self, thread_call_param_t);
+    void        runManualScan();
+    thread_call_t _manualScanTC = nullptr;
+
     /* ---------------------------------------------------------------- */
     RTW88PCIDevice    *_parent        = nullptr;
     struct rtw_dev    *_rtwdev        = nullptr;
     struct ieee80211_hw *_hw          = nullptr;
     struct ieee80211_vif *_vif        = nullptr;
     struct ieee80211_sta *_sta        = nullptr;
+    size_t              _staAllocSize = 0;
     struct pci_dev     *_pcidev       = nullptr;
 
     IOWorkLoop         *_wl           = nullptr;
@@ -161,6 +169,9 @@ private:
     uint32_t            _bssCount     = 0;
     IOLock             *_bssLock      = nullptr;
     uint32_t            _scanGeneration = 0;
+    struct ieee80211_channel *_manualScanChannels[256] = {};
+    uint32_t            _manualScanChannelCount = 0;
+    volatile bool       _manualScanAbort = false;
 
     /* Target BSS for connection */
     RTW88BSS            _targetBSS    = {};

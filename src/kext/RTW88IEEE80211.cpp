@@ -553,6 +553,8 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
 
     _connectTC = thread_call_allocate((thread_call_func_t)RTW88IEEE80211::connectTCFn,
                                        (thread_call_param_t)this);
+    _manualScanTC = thread_call_allocate((thread_call_func_t)RTW88IEEE80211::manualScanTCFn,
+                                          (thread_call_param_t)this);
 
     /* Install callbacks into compat layer */
     static struct rtw88_hw_callbacks cbs = {
@@ -582,6 +584,9 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
 void RTW88IEEE80211::free()
 {
     clearKeys();
+    releaseSta();
+    _manualScanAbort = true;
+    if (_manualScanTC) { thread_call_cancel(_manualScanTC); thread_call_free(_manualScanTC); _manualScanTC = nullptr; }
     if (_connectTC) { thread_call_cancel(_connectTC); thread_call_free(_connectTC); _connectTC = nullptr; }
     if (_timer)  { _wl->removeEventSource(_timer); _timer->release();  _timer = nullptr; }
     if (_gate)   { _wl->removeEventSource(_gate);  _gate->release();   _gate = nullptr; }
@@ -621,6 +626,19 @@ void RTW88IEEE80211::clearKeys()
     memset(_gtk, 0, sizeof(_gtk));
     memset(_ccmpTxPn, 0, sizeof(_ccmpTxPn));
     _rxCcmpIvSkipLogged = false;
+}
+
+void RTW88IEEE80211::releaseSta()
+{
+    if (!_sta)
+        return;
+
+    if (_hw && _hw->ops && _hw->ops->sta_remove && _vif)
+        _hw->ops->sta_remove(_hw, _vif, _sta);
+
+    IOFree(_sta, _staAllocSize ? _staAllocSize : sizeof(struct ieee80211_sta));
+    _sta = nullptr;
+    _staAllocSize = 0;
 }
 
 bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
@@ -771,8 +789,10 @@ void RTW88IEEE80211::stop()
 
     if (_state == RTW88_STATE_CONNECTED && _powered)
         doDisconnect();
-    else
+    else {
         clearKeys();
+        releaseSta();
+    }
 
     if (_vif && _hw && _hw->ops) {
         if (_powered && _hw->ops->stop) {
@@ -1175,7 +1195,7 @@ IOReturn RTW88IEEE80211::cmdScan()
 {
     if (_state != RTW88_STATE_IDLE)
         return kIOReturnBusy;
-    if (!_hw || !_hw->ops || !_hw->ops->hw_scan) return kIOReturnNotReady;
+    if (!_hw || !_hw->ops) return kIOReturnNotReady;
 
     IOLockLock(_bssLock);
     _scanGeneration++;
@@ -1200,11 +1220,41 @@ IOReturn RTW88IEEE80211::cmdScan()
                 if (n_chans < 256) {
                     /* Only scan enabled channels */
                     if (!(band->channels[j].flags & IEEE80211_CHAN_DISABLED)) {
+                        band->channels[j].band = band->band;
                         chans[n_chans++] = &band->channels[j];
                     }
                 }
             }
         }
+    }
+
+    if (n_chans == 0) {
+        IOLog("rtw88: scan has no enabled channels\n");
+        _state = RTW88_STATE_IDLE;
+        return kIOReturnNotReady;
+    }
+
+    if (!_hw->ops->hw_scan || !rtw88_hw_scan_supported(_hw)) {
+        if (!_manualScanTC) {
+            _state = RTW88_STATE_IDLE;
+            return kIOReturnNotReady;
+        }
+
+        _manualScanChannelCount = (uint32_t)n_chans;
+        for (int i = 0; i < n_chans; i++)
+            _manualScanChannels[i] = chans[i];
+        _manualScanAbort = false;
+        _rxFrameCount = 0;
+
+        IOLog("rtw88: scan offload unavailable, using passive channel scan (%d channels)\n",
+              n_chans);
+        thread_call_enter(_manualScanTC);
+
+        _timeoutMs = 12000;
+        uint64_t d;
+        clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d);
+        _timer->wakeAtTime(d);
+        return kIOReturnSuccess;
     }
     
     req.req.channels = chans;
@@ -1214,7 +1264,22 @@ IOReturn RTW88IEEE80211::cmdScan()
 
     int hw_scan_ret = _hw->ops->hw_scan(_hw, _vif, &req);
     if (hw_scan_ret != 0) {
-        IOLog("rtw88: hw_scan returned %d -- scan not started\n", hw_scan_ret);
+        IOLog("rtw88: hw_scan returned %d -- falling back to passive scan\n",
+              hw_scan_ret);
+        if (_manualScanTC) {
+            _manualScanChannelCount = (uint32_t)n_chans;
+            for (int i = 0; i < n_chans; i++)
+                _manualScanChannels[i] = chans[i];
+            _manualScanAbort = false;
+            _rxFrameCount = 0;
+            thread_call_enter(_manualScanTC);
+
+            _timeoutMs = 12000;
+            uint64_t d;
+            clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d);
+            _timer->wakeAtTime(d);
+            return kIOReturnSuccess;
+        }
         _state = RTW88_STATE_IDLE;
         return kIOReturnError;
     }
@@ -1222,6 +1287,47 @@ IOReturn RTW88IEEE80211::cmdScan()
     _timeoutMs = 10000;
     uint64_t d; clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d); _timer->wakeAtTime(d);
     return kIOReturnSuccess;
+}
+
+void RTW88IEEE80211::manualScanTCFn(thread_call_param_t self, thread_call_param_t)
+{
+    ((RTW88IEEE80211 *)self)->runManualScan();
+}
+
+void RTW88IEEE80211::runManualScan()
+{
+    if (!_hw || !_vif) {
+        scanDone(true);
+        _manualScanChannelCount = 0;
+        return;
+    }
+
+    uint32_t count = _manualScanChannelCount;
+    if (count > 256)
+        count = 256;
+
+    rtw88_sw_scan_start(_hw, _vif);
+
+    for (uint32_t i = 0; i < count && !_manualScanAbort; i++) {
+        struct ieee80211_channel *chan = _manualScanChannels[i];
+        if (!chan)
+            continue;
+
+        _hw->conf.chandef.chan = chan;
+        _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
+        _hw->conf.chandef.center_freq1 = chan->center_freq;
+
+        rtw88_sw_scan_switch_channel(_hw);
+
+        /* Passive dwell: long enough for a typical 100 ms beacon interval,
+         * short enough to keep full dual-band scans under rtw88ctl's wait. */
+        IOSleep(140);
+    }
+
+    rtw88_sw_scan_complete(_hw, _vif);
+    scanDone(_manualScanAbort);
+    _manualScanAbort = false;
+    _manualScanChannelCount = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1233,6 +1339,7 @@ IOReturn RTW88IEEE80211::cmdConnect(const char *ssid, const char *password)
     if (_state != RTW88_STATE_IDLE) return kIOReturnBusy;
     if (!ssid) return kIOReturnBadArgument;
     clearKeys();
+    releaseSta();
 
     /* Find the SSID in our BSS list */
     IOLockLock(_bssLock);
@@ -1419,9 +1526,10 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
         size_t sta_sz = sizeof(struct ieee80211_sta) + _hw->sta_data_size;
         _sta = (struct ieee80211_sta *)IOMallocZero(sta_sz);
         if (_sta) {
+            _staAllocSize = sta_sz;
             memcpy(_sta->addr, _targetBSS.bssid, ETH_ALEN);
             _sta->aid  = aid;
-            _sta->wme  = false;
+            _sta->wme  = true;
 
             /* Populate supported rates so rtw_update_sta_info() builds a
              * non-empty rate-adaptation mask.  Keep HT/VHT disabled here:
@@ -1534,6 +1642,14 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
         body += 2 + sizeof(ext_rates_2g);
     }
 
+    /* WME information element. We later notify rtw88 that QoS is enabled, so
+     * advertise WME to the AP as well, especially for stricter 5GHz networks. */
+    static const uint8_t wme_info[] = {
+        0xdd, 0x07, 0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00
+    };
+    memcpy(body, wme_info, sizeof(wme_info));
+    body += sizeof(wme_info);
+
     /* Copy RSN IE from beacon if WPA2 */
     if (_wpa2) {
         const uint8_t *ie = _targetBSS.ies;
@@ -1584,6 +1700,7 @@ void RTW88IEEE80211::doDisconnect()
     bss->assoc = false;
     if (_hw->ops && _hw->ops->bss_info_changed)
         _hw->ops->bss_info_changed(_hw, _vif, bss, BSS_CHANGED_ASSOC);
+    releaseSta();
 
     _state = RTW88_STATE_IDLE;
     _timer->cancelTimeout();
@@ -1937,8 +2054,11 @@ void RTW88IEEE80211::onTimer()
     switch (_state) {
     case RTW88_STATE_SCANNING:
         IOLog("rtw88: scan timeout\n");
-        if (_hw && _hw->ops && _hw->ops->cancel_hw_scan)
+        if (_manualScanChannelCount) {
+            _manualScanAbort = true;
+        } else if (_hw && _hw->ops && _hw->ops->cancel_hw_scan) {
             _hw->ops->cancel_hw_scan(_hw, _vif);
+        }
         _state = RTW88_STATE_IDLE;
         break;
 

@@ -943,6 +943,8 @@ void rtw88_compat_exit(void)
 /* ------------------------------------------------------------------ */
 
 #include "main.h"
+#include "fw.h"
+#include "reg.h"
 
 /* We can't include rtw88's pci.h here because the compat tree's
  * linux/pci.h shadows it on the include path.  Just hardcode the few
@@ -1049,6 +1051,49 @@ bool rtw88_is_scanning(void)
     if (!g_rtw88_hw || !g_rtw88_hw->priv) return false;
     struct rtw_dev *rtwdev = (struct rtw_dev *)g_rtw88_hw->priv;
     return test_bit(RTW_FLAG_SCANNING, rtwdev->flags);
+}
+
+bool rtw88_hw_scan_supported(struct ieee80211_hw *hw)
+{
+    if (!hw || !hw->priv) return false;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+    return rtw_fw_feature_check(&rtwdev->fw, FW_FEATURE_SCAN_OFFLOAD);
+}
+
+void rtw88_sw_scan_start(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+    if (!hw || !hw->priv || !vif) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+    struct rtw_vif *rtwvif = (struct rtw_vif *)vif->drv_priv;
+    if (!rtwvif) return;
+
+    mutex_lock(&rtwdev->mutex);
+    rtw_core_scan_start(rtwdev, rtwvif, vif->addr, false);
+    rtwdev->hal.rcr &= ~BIT_CBSSID_BCN;
+    rtw_write32(rtwdev, REG_RCR, rtwdev->hal.rcr);
+    mutex_unlock(&rtwdev->mutex);
+}
+
+void rtw88_sw_scan_switch_channel(struct ieee80211_hw *hw)
+{
+    if (!hw || !hw->priv) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+
+    mutex_lock(&rtwdev->mutex);
+    rtw_set_channel(rtwdev);
+    mutex_unlock(&rtwdev->mutex);
+}
+
+void rtw88_sw_scan_complete(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+    if (!hw || !hw->priv || !vif) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+
+    mutex_lock(&rtwdev->mutex);
+    rtwdev->hal.rcr |= BIT_CBSSID_BCN;
+    rtw_write32(rtwdev, REG_RCR, rtwdev->hal.rcr);
+    rtw_core_scan_complete(rtwdev, vif, false);
+    mutex_unlock(&rtwdev->mutex);
 }
 
 /*

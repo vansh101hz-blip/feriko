@@ -169,9 +169,16 @@ void rtw88_force_wifi_only(void);
 unsigned int rtw88_be_tx_avail(void);
 void rtw88_set_tx_resume_cb(void (*cb)(void));
 
+struct ieee80211_hw;
+struct ieee80211_vif;
+
 /* Returns true while the driver's RTW_FLAG_SCANNING bit is set.
  * Used by the kext to wait for post-scan MMIO cleanup before connecting. */
 bool rtw88_is_scanning(void);
+bool rtw88_hw_scan_supported(struct ieee80211_hw *hw);
+void rtw88_sw_scan_start(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+void rtw88_sw_scan_switch_channel(struct ieee80211_hw *hw);
+void rtw88_sw_scan_complete(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
 
 /*
  * Configure channel + BSSID in the chip for the connect flow.
@@ -179,8 +186,6 @@ bool rtw88_is_scanning(void);
  * rtw_leave_lps_deep MMIO-read polling) to avoid post-scan PCIe hangs.
  * Caller must set hw->conf.chandef before calling.
  */
-struct ieee80211_hw;
-struct ieee80211_vif;
 void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
                              struct ieee80211_vif *vif,
                              const uint8_t *bssid);
