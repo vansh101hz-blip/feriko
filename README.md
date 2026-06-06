@@ -8,10 +8,10 @@ Feixiao aims to support the following Realtek chipsets:
 - RTL8822BE
 - RTL8822CE
 - RTL8821CE
-- RTL8821AE
+- RTL8812AE
 - RTL8814AE
 
-*Note: USB and SDIO variants are currently unsupported/untested.*
+*Note: USB and SDIO variants are currently unsupported.*
 
 ## Features
 

@@ -39,6 +39,8 @@ void rtw88_set_hw_callbacks(struct rtw88_hw_callbacks *cbs, void *kext_hw);
 extern const struct rtw_chip_info rtw8822b_hw_spec;
 extern const struct rtw_chip_info rtw8822c_hw_spec;
 extern const struct rtw_chip_info rtw8821c_hw_spec;
+extern const struct rtw_chip_info rtw8821a_hw_spec;
+extern const struct rtw_chip_info rtw8812a_hw_spec;
 extern const struct rtw_chip_info rtw8814a_hw_spec;
 
 } /* extern "C" */
@@ -486,6 +488,8 @@ static const struct rtw88_pci_id_entry rtw88_pci_chip_table[] = {
     { 0xC82F, &rtw8822c_hw_spec },  /* RTL8822CE variant */
     { 0xC821, &rtw8821c_hw_spec },  /* RTL8821CE */
     { 0xB821, &rtw8821c_hw_spec },  /* RTL8821CE variant */
+    { 0x8821, &rtw8821a_hw_spec },  /* RTL8821AE */
+    { 0x8812, &rtw8812a_hw_spec },  /* RTL8812AE */
     { 0x8813, &rtw8814a_hw_spec },  /* RTL8814AE */
     { 0, nullptr }
 };

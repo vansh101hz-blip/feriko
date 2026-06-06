@@ -178,6 +178,58 @@ static struct rtw88_dma_alloc_ops _dma_ops = {
     .sync_single_for_device = compat_dma_sync_dev,
 };
 
+const char *RTW88PCIDevice::chipDisplayName() const
+{
+    if (!_compatPciDev)
+        return "Realtek Wireless";
+
+    switch (_compatPciDev->device) {
+    case 0xB822:
+        return "RTL8822BE";
+    case 0xC822:
+    case 0xC82F:
+        return "RTL8822CE";
+    case 0xC821:
+    case 0xB821:
+        return "RTL8821CE";
+    case 0x8821:
+        return "RTL8821AE";
+    case 0x8812:
+        return "RTL8812AE";
+    case 0x8813:
+        return "RTL8814AE";
+    default:
+        return "Realtek Wireless";
+    }
+}
+
+const OSString *RTW88PCIDevice::newVendorString() const
+{
+    return OSString::withCString("Realtek");
+}
+
+const OSString *RTW88PCIDevice::newModelString() const
+{
+    return OSString::withCString(chipDisplayName());
+}
+
+void RTW88PCIDevice::publishHardwareIdentity()
+{
+    const char *chip = chipDisplayName();
+
+    setName(chip);
+    setProperty(kIOVendor, "Realtek");
+    setProperty(kIOModel, chip);
+    setProperty("Product Name", chip);
+
+    if (_iface) {
+        _iface->setName(chip);
+        _iface->setProperty(kIOModel, chip);
+        _iface->setProperty("IOUserVisibleName", chip);
+        _iface->setProperty("Product Name", chip);
+    }
+}
+
 /* C-linkage trampoline registered with the compat layer; the IRQ bottom-half
  * calls it after tx_isr to resume a flow-control-stalled output queue. */
 extern "C" void rtw88_tx_resume_trampoline(void)
@@ -406,6 +458,8 @@ bool RTW88PCIDevice::attachDevice()
         IOLog("rtw88: attachInterface failed\n");
         return false;
     }
+
+    publishHardwareIdentity();
 
     if (!setupMediumDict()) return false;
 

@@ -44,6 +44,8 @@ public:
                                      IOService *actor) override;
 
     /* IONetworkController */
+    const OSString *newVendorString() const override;
+    const OSString *newModelString() const override;
     IOReturn enable(IONetworkInterface *iface) override;
     IOReturn disable(IONetworkInterface *iface) override;
     IOReturn setMaxPacketSize(UInt32 maxSize) override;
@@ -111,6 +113,8 @@ private:
     bool     setupInterrupt();
     bool     setupDMA();
     void     teardown();
+    const char *chipDisplayName() const;
+    void     publishHardwareIdentity();
 
     bool     setupMediumDict();
     void     addMedium(OSDictionary *mediums, IOMediumType type, UInt64 speed);
