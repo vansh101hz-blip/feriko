@@ -476,11 +476,14 @@ void rtw88_netif_napi_del(struct napi_struct *napi)
         thread_call_free((thread_call_t)napi->thread_call);
         napi->thread_call = NULL;
     }
+    napi->poll = NULL;
+    napi->dev = NULL;
+    napi->running = 0;
 }
 
 void rtw88_napi_schedule(struct napi_struct *napi)
 {
-    if (napi && napi->thread_call) {
+    if (napi && napi->poll && napi->thread_call) {
         thread_call_enter((thread_call_t)napi->thread_call);
     }
 }
