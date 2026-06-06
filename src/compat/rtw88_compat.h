@@ -189,6 +189,9 @@ void rtw88_sw_scan_complete(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
 void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
                              struct ieee80211_vif *vif,
                              const uint8_t *bssid);
+void rtw88_restore_connected_hw(struct ieee80211_hw *hw,
+                                 struct ieee80211_vif *vif,
+                                 const uint8_t *bssid);
 
 /* Register the single active VIF so ieee80211_iterate_active_interfaces*
  * can call back into rtw88 internals (e.g. rtw_build_rsvd_page_iter for

@@ -778,6 +778,7 @@ IOReturn RTW88IEEE80211::start()
     }
 
     _state = RTW88_STATE_IDLE;
+    _scanReturnState = RTW88_STATE_IDLE;
     RTW88_STAGE("IEEE80211::start complete — SUCCESS");
     return kIOReturnSuccess;
 }
@@ -787,7 +788,9 @@ void RTW88IEEE80211::stop()
     IOLog("rtw88: IEEE80211 stop\n");
     _timer->cancelTimeout();
 
-    if (_state == RTW88_STATE_CONNECTED && _powered)
+    if ((_state == RTW88_STATE_CONNECTED ||
+         (_state == RTW88_STATE_SCANNING &&
+          _scanReturnState == RTW88_STATE_CONNECTED)) && _powered)
         doDisconnect();
     else {
         clearKeys();
@@ -811,6 +814,7 @@ void RTW88IEEE80211::stop()
     _rtwdev = nullptr;
     _hw     = nullptr;
     _state  = RTW88_STATE_IDLE;
+    _scanReturnState = RTW88_STATE_IDLE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -864,7 +868,12 @@ void RTW88IEEE80211::handleInterrupt()
 UInt32 RTW88IEEE80211::outputPacket(mbuf_t m)
 {
     /* Need an associated STA before data frames can be sent. */
-    if (_state != RTW88_STATE_CONNECTED || !_rtwdev || !_hw || !_vif || !_sta) {
+    bool connected = (_state == RTW88_STATE_CONNECTED) ||
+                     (_state == RTW88_STATE_SCANNING &&
+                      _scanReturnState == RTW88_STATE_CONNECTED &&
+                      (_manualScanChannelCount == 0 ||
+                       _manualScanOnHomeChannel));
+    if (!connected || !_rtwdev || !_hw || !_vif || !_sta) {
         mbuf_freem(m);
         return kIOReturnOutputDropped;
     }
@@ -965,7 +974,9 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
     case 0x00A0: /* disassoc */
     case 0x00C0: /* deauth */
         if (_state == RTW88_STATE_CONNECTED ||
-            _state == RTW88_STATE_HANDSHAKING) {
+            _state == RTW88_STATE_HANDSHAKING ||
+            (_state == RTW88_STATE_SCANNING &&
+             _scanReturnState == RTW88_STATE_CONNECTED)) {
             struct ieee80211_hdr_3addr *h3 =
                 (struct ieee80211_hdr_3addr *)skb->data;
             bool fromTarget = memcmp(h3->addr3, _targetBSS.bssid, 6) == 0 ||
@@ -978,6 +989,7 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
             }
             clearKeys();
             _state = RTW88_STATE_IDLE;
+            _scanReturnState = RTW88_STATE_IDLE;
             if (_parent)
                 _parent->setLinkStatus(kIONetworkLinkValid);
         }
@@ -988,6 +1000,53 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
         kfree_skb(skb);
         break;
     }
+}
+
+static uint32_t rtw88ReadSuite(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static bool rtw88RsnSupportsCcmpPsk(const uint8_t *rsn, uint8_t len)
+{
+    const uint8_t *p = rsn;
+    const uint8_t *end = rsn + len;
+
+    if (p + 8 > end)
+        return false;
+
+    p += 2; /* version */
+    (void)rtw88ReadSuite(p);
+    p += 4;
+
+    if (p + 2 > end)
+        return false;
+    uint16_t pairwiseCount = (uint16_t)(p[0] | (p[1] << 8));
+    p += 2;
+    if (p + pairwiseCount * 4 > end)
+        return false;
+
+    bool hasCcmp = false;
+    for (uint16_t i = 0; i < pairwiseCount; i++, p += 4) {
+        if (rtw88ReadSuite(p) == WLAN_CIPHER_SUITE_CCMP)
+            hasCcmp = true;
+    }
+
+    if (p + 2 > end)
+        return false;
+    uint16_t akmCount = (uint16_t)(p[0] | (p[1] << 8));
+    p += 2;
+    if (p + akmCount * 4 > end)
+        return false;
+
+    bool hasPsk = false;
+    for (uint16_t i = 0; i < akmCount; i++, p += 4) {
+        if (rtw88ReadSuite(p) == 0x000FAC02) /* 00-0f-ac:2 PSK */
+            hasPsk = true;
+    }
+
+    return hasCcmp && hasPsk;
 }
 
 void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
@@ -1023,7 +1082,8 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
             bss->channel = body[2];
         } else if (id == WLAN_EID_HT_OPERATION && len >= 1 && bss->channel == 0) {
             bss->channel = body[2];
-        } else if (id == WLAN_EID_RSN) {
+        } else if (id == WLAN_EID_RSN &&
+                   rtw88RsnSupportsCcmpPsk(body + 2, len)) {
             bss->cipher = WLAN_CIPHER_SUITE_CCMP;
             bss->akm    = 0x000FAC02; /* PSK */
         }
@@ -1076,8 +1136,11 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
 
 void RTW88IEEE80211::processRxData(struct sk_buff *skb)
 {
-    if (_state != RTW88_STATE_CONNECTED &&
-        _state != RTW88_STATE_HANDSHAKING) {
+    bool connected = (_state == RTW88_STATE_CONNECTED) ||
+                     (_state == RTW88_STATE_HANDSHAKING) ||
+                     (_state == RTW88_STATE_SCANNING &&
+                      _scanReturnState == RTW88_STATE_CONNECTED);
+    if (!connected) {
         kfree_skb(skb);
         return;
     }
@@ -1162,6 +1225,78 @@ void RTW88IEEE80211::txStatus(struct sk_buff *skb)
 /*  Scan                                                                */
 /* ------------------------------------------------------------------ */
 
+void RTW88IEEE80211::restoreConnectedChannel()
+{
+    if (_scanReturnState != RTW88_STATE_CONNECTED || !_hw || !_vif)
+        return;
+
+    struct ieee80211_channel *chan = nullptr;
+    for (int b = 0; b < NL80211_NUM_BANDS && !chan; b++) {
+        struct ieee80211_supported_band *band =
+            (_hw->wiphy) ? _hw->wiphy->bands[b] : nullptr;
+        if (!band) continue;
+        for (int j = 0; j < band->n_channels; j++) {
+            if (band->channels[j].hw_value == _targetBSS.channel) {
+                chan = &band->channels[j];
+                chan->band = band->band;
+                break;
+            }
+        }
+    }
+
+    if (chan) {
+        _hw->conf.chandef.chan         = chan;
+        _hw->conf.chandef.width        = NL80211_CHAN_WIDTH_20_NOHT;
+        _hw->conf.chandef.center_freq1 = chan->center_freq;
+    } else {
+        IOLog("rtw88: scan restore: ch=%u not in band table\n",
+              _targetBSS.channel);
+    }
+
+    rtw88_restore_connected_hw(_hw, _vif, _targetBSS.bssid);
+
+    struct ieee80211_bss_conf *bss = &_vif->bss_conf;
+    bss->bssid = bss->bssid_buf;
+    memcpy(bss->bssid_buf, _targetBSS.bssid, ETH_ALEN);
+    bss->assoc = true;
+    bss->aid   = _assocAID;
+    _vif->cfg.assoc = true;
+    _vif->cfg.aid   = _assocAID;
+}
+
+bool RTW88IEEE80211::abortActiveScan(bool waitForIdle)
+{
+    if (_state != RTW88_STATE_SCANNING)
+        return true;
+
+    RTW88State returnState = _scanReturnState;
+    if (_manualScanChannelCount) {
+        _manualScanAbort = true;
+    } else if (_hw && _hw->ops && _hw->ops->cancel_hw_scan) {
+        _hw->ops->cancel_hw_scan(_hw, _vif);
+    }
+
+    if (!waitForIdle)
+        return true;
+
+    for (int i = 0; i < 40 && _state == RTW88_STATE_SCANNING; i++)
+        IOSleep(50);
+
+    if (_state == RTW88_STATE_SCANNING) {
+        if (_manualScanChannelCount)
+            return false;
+        if (returnState == RTW88_STATE_CONNECTED)
+            restoreConnectedChannel();
+        _state = (returnState == RTW88_STATE_IDLE) ?
+            RTW88_STATE_IDLE : returnState;
+        _scanReturnState = RTW88_STATE_IDLE;
+        _manualScanChannelCount = 0;
+        _manualScanOnHomeChannel = false;
+    }
+
+    return _state != RTW88_STATE_SCANNING;
+}
+
 void RTW88IEEE80211::scanDone(bool aborted)
 {
     if (!aborted) {
@@ -1169,8 +1304,10 @@ void RTW88IEEE80211::scanDone(bool aborted)
         RTW88BSS **link = &_bssList;
         while (*link) {
             RTW88BSS *b = *link;
-            bool isTarget = (_state == RTW88_STATE_CONNECTED ||
-                             _state == RTW88_STATE_HANDSHAKING) &&
+            RTW88State effectiveState =
+                (_state == RTW88_STATE_SCANNING) ? _scanReturnState : _state;
+            bool isTarget = (effectiveState == RTW88_STATE_CONNECTED ||
+                             effectiveState == RTW88_STATE_HANDSHAKING) &&
                             memcmp(b->bssid, _targetBSS.bssid, 6) == 0;
             uint32_t age = _scanGeneration - b->last_seen_scan;
 
@@ -1187,15 +1324,23 @@ void RTW88IEEE80211::scanDone(bool aborted)
         IOLockUnlock(_bssLock);
     }
 
-    if (_state == RTW88_STATE_SCANNING)
-        _state = RTW88_STATE_IDLE;
+    if (_state == RTW88_STATE_SCANNING) {
+        RTW88State returnState = _scanReturnState;
+        if (returnState == RTW88_STATE_CONNECTED && _manualScanChannelCount)
+            restoreConnectedChannel();
+        _state = (returnState == RTW88_STATE_IDLE) ?
+            RTW88_STATE_IDLE : returnState;
+        _scanReturnState = RTW88_STATE_IDLE;
+        _manualScanOnHomeChannel = false;
+    }
 }
 
 IOReturn RTW88IEEE80211::cmdScan()
 {
-    if (_state != RTW88_STATE_IDLE)
+    if (_state != RTW88_STATE_IDLE && _state != RTW88_STATE_CONNECTED)
         return kIOReturnBusy;
     if (!_hw || !_hw->ops) return kIOReturnNotReady;
+    RTW88State returnState = _state;
 
     IOLockLock(_bssLock);
     _scanGeneration++;
@@ -1206,6 +1351,8 @@ IOReturn RTW88IEEE80211::cmdScan()
     }
     IOLockUnlock(_bssLock);
 
+    _scanReturnState = (returnState == RTW88_STATE_CONNECTED) ?
+        returnState : RTW88_STATE_IDLE;
     _state = RTW88_STATE_SCANNING;
 
     struct ieee80211_scan_request req = {};
@@ -1230,13 +1377,15 @@ IOReturn RTW88IEEE80211::cmdScan()
 
     if (n_chans == 0) {
         IOLog("rtw88: scan has no enabled channels\n");
-        _state = RTW88_STATE_IDLE;
+        _state = returnState;
+        _scanReturnState = RTW88_STATE_IDLE;
         return kIOReturnNotReady;
     }
 
     if (!_hw->ops->hw_scan || !rtw88_hw_scan_supported(_hw)) {
         if (!_manualScanTC) {
-            _state = RTW88_STATE_IDLE;
+            _state = returnState;
+            _scanReturnState = RTW88_STATE_IDLE;
             return kIOReturnNotReady;
         }
 
@@ -1244,13 +1393,15 @@ IOReturn RTW88IEEE80211::cmdScan()
         for (int i = 0; i < n_chans; i++)
             _manualScanChannels[i] = chans[i];
         _manualScanAbort = false;
+        _manualScanOnHomeChannel = false;
         _rxFrameCount = 0;
 
         IOLog("rtw88: scan offload unavailable, using passive channel scan (%d channels)\n",
               n_chans);
         thread_call_enter(_manualScanTC);
 
-        _timeoutMs = 12000;
+        _timeoutMs = (_scanReturnState == RTW88_STATE_CONNECTED) ?
+            30000 : 12000;
         uint64_t d;
         clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d);
         _timer->wakeAtTime(d);
@@ -1271,16 +1422,19 @@ IOReturn RTW88IEEE80211::cmdScan()
             for (int i = 0; i < n_chans; i++)
                 _manualScanChannels[i] = chans[i];
             _manualScanAbort = false;
+            _manualScanOnHomeChannel = false;
             _rxFrameCount = 0;
             thread_call_enter(_manualScanTC);
 
-            _timeoutMs = 12000;
+            _timeoutMs = (_scanReturnState == RTW88_STATE_CONNECTED) ?
+                30000 : 12000;
             uint64_t d;
             clock_interval_to_deadline(_timeoutMs, kMillisecondScale, &d);
             _timer->wakeAtTime(d);
             return kIOReturnSuccess;
         }
-        _state = RTW88_STATE_IDLE;
+        _state = returnState;
+        _scanReturnState = RTW88_STATE_IDLE;
         return kIOReturnError;
     }
     /* Timeout: if scan doesn't complete in 10s */
@@ -1305,6 +1459,7 @@ void RTW88IEEE80211::runManualScan()
     uint32_t count = _manualScanChannelCount;
     if (count > 256)
         count = 256;
+    bool connectedScan = (_scanReturnState == RTW88_STATE_CONNECTED);
 
     rtw88_sw_scan_start(_hw, _vif);
 
@@ -1313,18 +1468,43 @@ void RTW88IEEE80211::runManualScan()
         if (!chan)
             continue;
 
+        _manualScanOnHomeChannel = false;
+
+        if (connectedScan) {
+            restoreConnectedChannel();
+            txNullFunc(true);
+            IOSleep(10);
+        }
+
         _hw->conf.chandef.chan = chan;
         _hw->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
         _hw->conf.chandef.center_freq1 = chan->center_freq;
 
         rtw88_sw_scan_switch_channel(_hw);
 
-        /* Passive dwell: long enough for a typical 100 ms beacon interval,
-         * short enough to keep full dual-band scans under rtw88ctl's wait. */
-        IOSleep(140);
+        bool passiveOnly = (chan->flags &
+            (IEEE80211_CHAN_NO_IR | IEEE80211_CHAN_RADAR)) != 0;
+        if (!passiveOnly)
+            txProbeRequest();
+
+        /* Active channels can use a short probe dwell. Passive/DFS channels
+         * still need a beacon-listen dwell. */
+        IOSleep(passiveOnly ? 140 : 70);
+
+        if (connectedScan && !_manualScanAbort) {
+            restoreConnectedChannel();
+            txNullFunc(false);
+            _manualScanOnHomeChannel = true;
+            IOSleep(80);
+        }
     }
 
+    _manualScanOnHomeChannel = false;
     rtw88_sw_scan_complete(_hw, _vif);
+    if (connectedScan) {
+        restoreConnectedChannel();
+        txNullFunc(false);
+    }
     scanDone(_manualScanAbort);
     _manualScanAbort = false;
     _manualScanChannelCount = 0;
@@ -1336,6 +1516,8 @@ void RTW88IEEE80211::runManualScan()
 
 IOReturn RTW88IEEE80211::cmdConnect(const char *ssid, const char *password)
 {
+    if (_state == RTW88_STATE_SCANNING && !abortActiveScan(true))
+        return kIOReturnBusy;
     if (_state != RTW88_STATE_IDLE) return kIOReturnBusy;
     if (!ssid) return kIOReturnBadArgument;
     clearKeys();
@@ -1564,12 +1746,15 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
         /* Derive PMK from passphrase now */
         derivePMK((uint8_t *)_password, (uint8_t *)_targetBSS.ssid,
                   _targetBSS.ssid_len, _pmk);
+        uint64_t d;
+        clock_interval_to_deadline(8000, kMillisecondScale, &d);
+        _timer->wakeAtTime(d);
     } else {
         _state = RTW88_STATE_CONNECTED;
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
+        _timer->cancelTimeout();
     }
-    _timer->cancelTimeout();
 }
 
 bool RTW88IEEE80211::buildAuthReq(uint8_t *buf, uint32_t *len)
@@ -1603,8 +1788,12 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
     hdr->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ << 4));
 
     uint8_t *body = buf + sizeof(*hdr);
-    /* Capability: ESS, Short Preamble */
-    body[0] = 0x31; body[1] = 0x04;
+    /* Capability: ESS, Short Preamble, and Privacy for encrypted APs. */
+    uint16_t cap = 0x0431;
+    if (_wpa2)
+        cap |= 0x0010;
+    body[0] = (uint8_t)(cap & 0xff);
+    body[1] = (uint8_t)(cap >> 8);
     /* Listen interval: 10 */
     body[2] = 10; body[3] = 0;
     body += 4;
@@ -1681,7 +1870,11 @@ IOReturn RTW88IEEE80211::cmdDisconnect()
 
 void RTW88IEEE80211::doDisconnect()
 {
-    if (!_hw || !_vif) { _state = RTW88_STATE_IDLE; return; }
+    if (!_hw || !_vif) {
+        _state = RTW88_STATE_IDLE;
+        _scanReturnState = RTW88_STATE_IDLE;
+        return;
+    }
     clearKeys();
 
     /* Send deauth frame */
@@ -1703,6 +1896,7 @@ void RTW88IEEE80211::doDisconnect()
     releaseSta();
 
     _state = RTW88_STATE_IDLE;
+    _scanReturnState = RTW88_STATE_IDLE;
     _timer->cancelTimeout();
     if (_parent)
         _parent->setLinkStatus(kIONetworkLinkValid);
@@ -1736,6 +1930,9 @@ void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
         derivePTK(_pmk, _anonce, _snonce, _macAddr, _targetBSS.bssid, _ptk);
         memcpy(_replayCtr, data + 9, 8);
         sendEAPOLKey(2, _replayCtr, false, false, true);
+        uint64_t d;
+        clock_interval_to_deadline(5000, kMillisecondScale, &d);
+        _timer->wakeAtTime(d);
     } else if (is_m3) {
         if (!eapol_mic_ok(_ptk, data, eapol_len)) {
             IOLog("rtw88: EAPOL M3 MIC check failed\n");
@@ -1780,6 +1977,7 @@ void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
 
         sendEAPOLKey(4, _replayCtr, false, false, true);
         _state = RTW88_STATE_CONNECTED;
+        _timer->cancelTimeout();
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
         IOLog("rtw88: WPA2 connected! gtk_len=%u gtk_idx=%u\n", gtk_len, gtk_idx);
@@ -1863,7 +2061,7 @@ bool RTW88IEEE80211::txMgmtFrame(const uint8_t *frame, uint32_t len)
 {
     if (!_hw || !_hw->ops || !_hw->ops->tx) return false;
 
-    struct sk_buff *skb = alloc_skb(len + 64, GFP_ATOMIC);
+    struct sk_buff *skb = alloc_skb(len + 128, GFP_ATOMIC);
     if (!skb) return false;
     skb_reserve(skb, 128); /* headroom for TX descriptor (48 B) + pkt_offset padding */
     skb_put_data(skb, frame, len);
@@ -1876,6 +2074,84 @@ bool RTW88IEEE80211::txMgmtFrame(const uint8_t *frame, uint32_t len)
     struct ieee80211_tx_control ctrl = { .sta = nullptr };
     _hw->ops->tx(_hw, &ctrl, skb);
     return true;
+}
+
+bool RTW88IEEE80211::txNullFunc(bool powerSave)
+{
+    if (!_hw || !_hw->ops || !_hw->ops->tx || !_vif || !_sta)
+        return false;
+
+    static const uint16_t IEEE80211_STYPE_NULLFUNC = 0x0040;
+    struct sk_buff *skb = alloc_skb(24 + 128, GFP_ATOMIC);
+    if (!skb) return false;
+    skb_reserve(skb, 128);
+
+    struct ieee80211_hdr_3addr *h =
+        (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
+    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC |
+                  IEEE80211_FCTL_TODS;
+    if (powerSave)
+        fc |= IEEE80211_FCTL_PM;
+    h->frame_control = cpu_to_le16(fc);
+    h->duration_id   = 0;
+    memcpy(h->addr1, _targetBSS.bssid, 6);
+    memcpy(h->addr2, _macAddr, 6);
+    memcpy(h->addr3, _targetBSS.bssid, 6);
+    h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+
+    skb_set_queue_mapping(skb, IEEE80211_AC_BE);
+    skb->priority = 0;
+
+    struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+    memset(info, 0, sizeof(*info));
+    info->flags = IEEE80211_TX_CTL_FIRST_FRAGMENT;
+    info->band  = (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ
+                                            : NL80211_BAND_2GHZ;
+    info->control.vif = _vif;
+    info->control.sta = _sta;
+
+    struct ieee80211_tx_control ctrl = { .sta = _sta };
+    _hw->ops->tx(_hw, &ctrl, skb);
+    return true;
+}
+
+bool RTW88IEEE80211::txProbeRequest()
+{
+    if (!_hw || !_hw->ops || !_hw->ops->tx)
+        return false;
+
+    uint8_t frame[128] = {};
+    struct ieee80211_hdr_3addr *hdr =
+        (struct ieee80211_hdr_3addr *)frame;
+    hdr->frame_control =
+        cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_PROBE_REQ);
+    memset(hdr->addr1, 0xff, 6);
+    memcpy(hdr->addr2, _macAddr, 6);
+    memset(hdr->addr3, 0xff, 6);
+    hdr->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+
+    uint8_t *body = frame + sizeof(*hdr);
+    body[0] = WLAN_EID_SSID;
+    body[1] = 0;
+    body += 2;
+
+    static const uint8_t rates_2g[] = {
+        0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24
+    };
+    static const uint8_t rates_5g[] = {
+        0x8c, 0x12, 0x98, 0x24, 0x30, 0x48, 0x60, 0x6c
+    };
+    bool is5g = _hw->conf.chandef.chan &&
+                _hw->conf.chandef.chan->band == NL80211_BAND_5GHZ;
+    const uint8_t *rates = is5g ? rates_5g : rates_2g;
+    uint8_t ratesLen = is5g ? sizeof(rates_5g) : sizeof(rates_2g);
+
+    body[0] = WLAN_EID_SUPP_RATES;
+    body[1] = ratesLen;
+    memcpy(body + 2, rates, ratesLen);
+    body += 2 + ratesLen;
+
+    return txMgmtFrame(frame, (uint32_t)(body - frame));
 }
 
 bool RTW88IEEE80211::txDataFrame(mbuf_t m)
@@ -2056,10 +2332,18 @@ void RTW88IEEE80211::onTimer()
         IOLog("rtw88: scan timeout\n");
         if (_manualScanChannelCount) {
             _manualScanAbort = true;
+            break;
         } else if (_hw && _hw->ops && _hw->ops->cancel_hw_scan) {
             _hw->ops->cancel_hw_scan(_hw, _vif);
         }
-        _state = RTW88_STATE_IDLE;
+        {
+            RTW88State returnState = _scanReturnState;
+            if (returnState == RTW88_STATE_CONNECTED)
+                restoreConnectedChannel();
+            _state = (returnState == RTW88_STATE_IDLE) ?
+                RTW88_STATE_IDLE : returnState;
+            _scanReturnState = RTW88_STATE_IDLE;
+        }
         break;
 
     case RTW88_STATE_AUTHENTICATING:
@@ -2074,7 +2358,7 @@ void RTW88IEEE80211::onTimer()
 
     case RTW88_STATE_HANDSHAKING:
         IOLog("rtw88: 4-way handshake timeout\n");
-        _state = RTW88_STATE_IDLE;
+        doDisconnect();
         break;
 
     default:

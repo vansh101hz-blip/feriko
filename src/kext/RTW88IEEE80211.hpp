@@ -109,6 +109,8 @@ private:
     void      doDisconnect();
     void      clearKeys();
     void      releaseSta();
+    bool      abortActiveScan(bool waitForIdle);
+    void      restoreConnectedChannel();
     bool      installKey(struct ieee80211_key_conf **slot, bool pairwise,
                          uint8_t keyidx, const uint8_t *tk, uint8_t tk_len);
 
@@ -123,6 +125,8 @@ private:
 
     /* Frame transmission helpers */
     bool      txMgmtFrame(const uint8_t *frame, uint32_t len);
+    bool      txNullFunc(bool powerSave);
+    bool      txProbeRequest();
     bool      txDataFrame(mbuf_t m);
     struct sk_buff *mbufToSkb(mbuf_t m);
     mbuf_t    skbToMbuf(struct sk_buff *skb);
@@ -160,6 +164,7 @@ private:
     IOLock             *_lock         = nullptr;
 
     RTW88State          _state        = RTW88_STATE_IDLE;
+    RTW88State          _scanReturnState = RTW88_STATE_IDLE;
     bool                _powered      = false;
     uint8_t             _macAddr[6]   = {};
     uint32_t            _timeoutMs    = 0;
@@ -172,6 +177,7 @@ private:
     struct ieee80211_channel *_manualScanChannels[256] = {};
     uint32_t            _manualScanChannelCount = 0;
     volatile bool       _manualScanAbort = false;
+    volatile bool       _manualScanOnHomeChannel = false;
 
     /* Target BSS for connection */
     RTW88BSS            _targetBSS    = {};

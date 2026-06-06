@@ -1201,6 +1201,36 @@ void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
     mutex_unlock(&rtwdev->mutex);
 }
 
+void rtw88_restore_connected_hw(struct ieee80211_hw *hw,
+                                 struct ieee80211_vif *vif,
+                                 const uint8_t *bssid)
+{
+    if (!hw || !hw->priv || !vif || !bssid) return;
+    struct rtw_dev *rtwdev = (struct rtw_dev *)hw->priv;
+    struct rtw_vif *rtwvif = (struct rtw_vif *)vif->drv_priv;
+
+    mutex_lock(&rtwdev->mutex);
+
+    rtw_set_channel(rtwdev);
+
+    if (rtwvif) {
+        memcpy(rtwvif->bssid, bssid, ETH_ALEN);
+        rtw_vif_port_config(rtwdev, rtwvif, PORT_SET_BSSID);
+    }
+
+    rtwdev->need_rfk = true;
+    rtw_chip_prepare_tx(rtwdev);
+
+    if (hw->conf.chandef.chan &&
+        hw->conf.chandef.chan->band == NL80211_BAND_5GHZ) {
+        rtwdev->dm_info.fix_rate = DESC_RATE6M;
+    } else {
+        rtwdev->dm_info.fix_rate = 0xFF;
+    }
+
+    mutex_unlock(&rtwdev->mutex);
+}
+
 void rtw88_get_fw_version(struct rtw_dev *rtwdev, uint16_t *version, uint8_t *sub_version)
 {
     if (version) *version = 0;
