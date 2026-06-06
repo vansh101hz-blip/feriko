@@ -41,6 +41,7 @@ struct RTW88BSS {
     uint32_t capabilities;
     uint32_t cipher;      /* WLAN_CIPHER_SUITE_* */
     uint32_t akm;
+    uint32_t last_seen_scan;
     /* Raw IE data for association */
     uint8_t  ies[512];
     uint16_t ies_len;
@@ -159,6 +160,7 @@ private:
     RTW88BSS           *_bssList      = nullptr;
     uint32_t            _bssCount     = 0;
     IOLock             *_bssLock      = nullptr;
+    uint32_t            _scanGeneration = 0;
 
     /* Target BSS for connection */
     RTW88BSS            _targetBSS    = {};

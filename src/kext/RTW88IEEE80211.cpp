@@ -864,14 +864,7 @@ void RTW88IEEE80211::rxFrame(struct sk_buff *skb)
     struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
     __le16 fc = hdr->frame_control;
 
-    /* Diagnostics: log a periodic sample of RX activity so we can confirm
-     * whether the firmware is actually delivering frames during scan. */
     _rxFrameCount++;
-    if (_state == RTW88_STATE_SCANNING && (_rxFrameCount % 16) == 1) {
-        uint16_t fcv = le16_to_cpu(fc);
-        IOLog("rtw88: rxFrame #%u (fc=0x%04x type=%u stype=0x%02x len=%u)\n",
-              _rxFrameCount, fcv, (fcv >> 2) & 3, fcv & 0x00f0, skb->len);
-    }
 
     if (ieee80211_is_mgmt(fc)) {
         processRxMgmt(skb);
@@ -949,6 +942,16 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
     case 0x00C0: /* deauth */
         if (_state == RTW88_STATE_CONNECTED ||
             _state == RTW88_STATE_HANDSHAKING) {
+            struct ieee80211_hdr_3addr *h3 =
+                (struct ieee80211_hdr_3addr *)skb->data;
+            bool fromTarget = memcmp(h3->addr3, _targetBSS.bssid, 6) == 0 ||
+                              memcmp(h3->addr2, _targetBSS.bssid, 6) == 0;
+            bool addressedToUs = memcmp(h3->addr1, _macAddr, 6) == 0 ||
+                                 is_broadcast_ether_addr(h3->addr1);
+            if (!fromTarget || !addressedToUs) {
+                kfree_skb(skb);
+                break;
+            }
             clearKeys();
             _state = RTW88_STATE_IDLE;
             if (_parent)
@@ -1013,6 +1016,7 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
     struct ieee80211_rx_status *rxs = IEEE80211_SKB_RXCB(skb);
     bss->rssi = rxs->signal;
     bss->freq = rxs->freq;
+    bss->last_seen_scan = _scanGeneration;
     
     if (bss->channel == 0 && bss->freq) {
         int f = bss->freq;
@@ -1136,25 +1140,46 @@ void RTW88IEEE80211::txStatus(struct sk_buff *skb)
 
 void RTW88IEEE80211::scanDone(bool aborted)
 {
-    IOLog("rtw88: scan done (aborted=%d), found %u APs, "
-          "saw %u RX frames during scan\n",
-          aborted, _bssCount, _rxFrameCount);
+    if (!aborted) {
+        IOLockLock(_bssLock);
+        RTW88BSS **link = &_bssList;
+        while (*link) {
+            RTW88BSS *b = *link;
+            bool isTarget = (_state == RTW88_STATE_CONNECTED ||
+                             _state == RTW88_STATE_HANDSHAKING) &&
+                            memcmp(b->bssid, _targetBSS.bssid, 6) == 0;
+            uint32_t age = _scanGeneration - b->last_seen_scan;
+
+            if (!isTarget && age > 3) {
+                *link = b->next;
+                IOFree(b, sizeof(*b));
+                if (_bssCount)
+                    _bssCount--;
+                continue;
+            }
+
+            link = &b->next;
+        }
+        IOLockUnlock(_bssLock);
+    }
+
     if (_state == RTW88_STATE_SCANNING)
         _state = RTW88_STATE_IDLE;
 }
 
 IOReturn RTW88IEEE80211::cmdScan()
 {
-    if (_state != RTW88_STATE_IDLE && _state != RTW88_STATE_SCANNING)
+    if (_state != RTW88_STATE_IDLE)
         return kIOReturnBusy;
     if (!_hw || !_hw->ops || !_hw->ops->hw_scan) return kIOReturnNotReady;
 
-    /* Clear old results */
     IOLockLock(_bssLock);
-    RTW88BSS *b = _bssList;
-    while (b) { RTW88BSS *n = b->next; IOFree(b, sizeof(*b)); b = n; }
-    _bssList  = nullptr;
-    _bssCount = 0;
+    _scanGeneration++;
+    if (_scanGeneration == 0) {
+        _scanGeneration = 1;
+        for (RTW88BSS *b = _bssList; b; b = b->next)
+            b->last_seen_scan = 1;
+    }
     IOLockUnlock(_bssLock);
 
     _state = RTW88_STATE_SCANNING;
@@ -1182,8 +1207,6 @@ IOReturn RTW88IEEE80211::cmdScan()
     req.req.n_channels = n_chans;
 
     _rxFrameCount = 0;  /* reset diagnostic counter at scan start */
-
-    IOLog("rtw88: hw_scan starting -- %d channels (2.4G+5G)\n", n_chans);
 
     int hw_scan_ret = _hw->ops->hw_scan(_hw, _vif, &req);
     if (hw_scan_ret != 0) {
@@ -1979,18 +2002,10 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
     uint32_t written = 4; // reserve first 4 bytes for total length
 
     IOLockLock(_bssLock);
-    IOLog("rtw88: cmdGetBSSList: _bssCount=%u _bssList=%p\n",
-          _bssCount, (void *)_bssList);
     for (RTW88BSS *b = _bssList; b; b = b->next) {
         /* Each entry: ssid_len(1), ssid(ssid_len), bssid(6), rssi(2),
          *             channel(1), cipher(4) */
         uint32_t entry_sz = 1 + b->ssid_len + 6 + 2 + 1 + 4;
-        IOLog("rtw88: BSS entry: ssid_len=%u ssid='%.32s' bssid=%02x:%02x:%02x:%02x:%02x:%02x "
-              "rssi=%d ch=%u cipher=0x%08x entry_sz=%u\n",
-              b->ssid_len, b->ssid,
-              b->bssid[0], b->bssid[1], b->bssid[2],
-              b->bssid[3], b->bssid[4], b->bssid[5],
-              (int)b->rssi, b->channel, b->cipher, entry_sz);
         if (written + entry_sz > max) {
             IOLog("rtw88: BSS entry skipped (buffer full: written=%u max=%u)\n", written, max);
             break;
@@ -2005,7 +2020,6 @@ IOReturn RTW88IEEE80211::cmdGetBSSList(uint8_t *buf, uint32_t *len)
         memcpy(buf + written, &b->cipher, 4);          written += 4;
     }
     IOLockUnlock(_bssLock);
-    IOLog("rtw88: cmdGetBSSList: written=%u total bytes\n", written);
 
     /* Write total written bytes into the first 4 bytes */
     uint32_t total = written;

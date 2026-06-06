@@ -849,8 +849,6 @@ IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
                                         UInt32 type, OSDictionary *properties,
                                         IOUserClient **handler)
 {
-    IOLog("rtw88: RTW88PCIDevice::newUserClient() called, type=%u\n", (unsigned)type);
-
     RTW88UserClient *client = new RTW88UserClient;
     if (!client) {
         IOLog("rtw88: RTW88UserClient allocation failed\n");
@@ -879,7 +877,6 @@ IOReturn RTW88PCIDevice::newUserClient(task_t owningTask, void *securityID,
         return kIOReturnBadArgument;
     }
 
-    IOLog("rtw88: RTW88PCIDevice::newUserClient() success\n");
     *handler = client;
     return kIOReturnSuccess;
 }
