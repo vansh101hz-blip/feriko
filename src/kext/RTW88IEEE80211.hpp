@@ -105,6 +105,9 @@ private:
     void      doAssociate();
     void      doHandshake(const uint8_t *eapol, uint32_t len);
     void      doDisconnect();
+    void      clearKeys();
+    bool      installKey(struct ieee80211_key_conf **slot, bool pairwise,
+                         uint8_t keyidx, const uint8_t *tk, uint8_t tk_len);
 
     bool      buildAssocReq(uint8_t *buf, uint32_t *len);
     bool      buildAuthReq(uint8_t *buf, uint32_t *len);
@@ -164,6 +167,8 @@ private:
     uint8_t  _pmk[32]  = {};
     uint8_t  _ptk[64]  = {};   /* PTK = KCK|KEK|TK */
     uint8_t  _gtk[32]  = {};
+    struct ieee80211_key_conf *_ptkConf = nullptr;
+    struct ieee80211_key_conf *_gtkConf = nullptr;
     uint8_t  _anonce[32] = {};
     uint8_t  _snonce[32] = {};
     uint8_t  _replayCtr[8] = {};

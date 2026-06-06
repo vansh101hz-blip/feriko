@@ -254,6 +254,217 @@ static void derivePTK(const uint8_t pmk[32], const uint8_t anonce[32], const uin
     }
 }
 
+static const uint8_t aes_sbox[256] = {
+    0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+    0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+    0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+    0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+    0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+    0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+    0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+    0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+    0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+    0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+    0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+    0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+    0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+    0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+    0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+    0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16
+};
+
+static const uint8_t aes_rsbox[256] = {
+    0x52,0x09,0x6a,0xd5,0x30,0x36,0xa5,0x38,0xbf,0x40,0xa3,0x9e,0x81,0xf3,0xd7,0xfb,
+    0x7c,0xe3,0x39,0x82,0x9b,0x2f,0xff,0x87,0x34,0x8e,0x43,0x44,0xc4,0xde,0xe9,0xcb,
+    0x54,0x7b,0x94,0x32,0xa6,0xc2,0x23,0x3d,0xee,0x4c,0x95,0x0b,0x42,0xfa,0xc3,0x4e,
+    0x08,0x2e,0xa1,0x66,0x28,0xd9,0x24,0xb2,0x76,0x5b,0xa2,0x49,0x6d,0x8b,0xd1,0x25,
+    0x72,0xf8,0xf6,0x64,0x86,0x68,0x98,0x16,0xd4,0xa4,0x5c,0xcc,0x5d,0x65,0xb6,0x92,
+    0x6c,0x70,0x48,0x50,0xfd,0xed,0xb9,0xda,0x5e,0x15,0x46,0x57,0xa7,0x8d,0x9d,0x84,
+    0x90,0xd8,0xab,0x00,0x8c,0xbc,0xd3,0x0a,0xf7,0xe4,0x58,0x05,0xb8,0xb3,0x45,0x06,
+    0xd0,0x2c,0x1e,0x8f,0xca,0x3f,0x0f,0x02,0xc1,0xaf,0xbd,0x03,0x01,0x13,0x8a,0x6b,
+    0x3a,0x91,0x11,0x41,0x4f,0x67,0xdc,0xea,0x97,0xf2,0xcf,0xce,0xf0,0xb4,0xe6,0x73,
+    0x96,0xac,0x74,0x22,0xe7,0xad,0x35,0x85,0xe2,0xf9,0x37,0xe8,0x1c,0x75,0xdf,0x6e,
+    0x47,0xf1,0x1a,0x71,0x1d,0x29,0xc5,0x89,0x6f,0xb7,0x62,0x0e,0xaa,0x18,0xbe,0x1b,
+    0xfc,0x56,0x3e,0x4b,0xc6,0xd2,0x79,0x20,0x9a,0xdb,0xc0,0xfe,0x78,0xcd,0x5a,0xf4,
+    0x1f,0xdd,0xa8,0x33,0x88,0x07,0xc7,0x31,0xb1,0x12,0x10,0x59,0x27,0x80,0xec,0x5f,
+    0x60,0x51,0x7f,0xa9,0x19,0xb5,0x4a,0x0d,0x2d,0xe5,0x7a,0x9f,0x93,0xc9,0x9c,0xef,
+    0xa0,0xe0,0x3b,0x4d,0xae,0x2a,0xf5,0xb0,0xc8,0xeb,0xbb,0x3c,0x83,0x53,0x99,0x61,
+    0x17,0x2b,0x04,0x7e,0xba,0x77,0xd6,0x26,0xe1,0x69,0x14,0x63,0x55,0x21,0x0c,0x7d
+};
+
+static uint8_t aes_xtime(uint8_t x)
+{
+    return (uint8_t)((x << 1) ^ ((x & 0x80) ? 0x1b : 0));
+}
+
+static uint8_t aes_mul(uint8_t x, uint8_t y)
+{
+    uint8_t r = 0;
+    while (y) {
+        if (y & 1) r ^= x;
+        x = aes_xtime(x);
+        y >>= 1;
+    }
+    return r;
+}
+
+static void aes128_key_expand(const uint8_t key[16], uint8_t round_key[176])
+{
+    static const uint8_t rcon[10] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36};
+    memcpy(round_key, key, 16);
+    for (int bytes = 16, r = 0; bytes < 176; bytes += 4) {
+        uint8_t t[4];
+        memcpy(t, round_key + bytes - 4, 4);
+        if ((bytes & 15) == 0) {
+            uint8_t tmp = t[0];
+            t[0] = aes_sbox[t[1]] ^ rcon[r++];
+            t[1] = aes_sbox[t[2]];
+            t[2] = aes_sbox[t[3]];
+            t[3] = aes_sbox[tmp];
+        }
+        for (int i = 0; i < 4; i++)
+            round_key[bytes + i] = round_key[bytes - 16 + i] ^ t[i];
+    }
+}
+
+static void aes_add_round_key(uint8_t state[16], const uint8_t *rk)
+{
+    for (int i = 0; i < 16; i++) state[i] ^= rk[i];
+}
+
+static void aes_inv_shift_rows(uint8_t s[16])
+{
+    uint8_t t;
+    t = s[13]; s[13] = s[9]; s[9] = s[5]; s[5] = s[1]; s[1] = t;
+    t = s[2]; s[2] = s[10]; s[10] = t; t = s[6]; s[6] = s[14]; s[14] = t;
+    t = s[3]; s[3] = s[7]; s[7] = s[11]; s[11] = s[15]; s[15] = t;
+}
+
+static void aes_inv_sub_bytes(uint8_t s[16])
+{
+    for (int i = 0; i < 16; i++) s[i] = aes_rsbox[s[i]];
+}
+
+static void aes_inv_mix_columns(uint8_t s[16])
+{
+    for (int c = 0; c < 4; c++) {
+        uint8_t *p = s + c * 4;
+        uint8_t a0 = p[0], a1 = p[1], a2 = p[2], a3 = p[3];
+        p[0] = aes_mul(a0, 0x0e) ^ aes_mul(a1, 0x0b) ^ aes_mul(a2, 0x0d) ^ aes_mul(a3, 0x09);
+        p[1] = aes_mul(a0, 0x09) ^ aes_mul(a1, 0x0e) ^ aes_mul(a2, 0x0b) ^ aes_mul(a3, 0x0d);
+        p[2] = aes_mul(a0, 0x0d) ^ aes_mul(a1, 0x09) ^ aes_mul(a2, 0x0e) ^ aes_mul(a3, 0x0b);
+        p[3] = aes_mul(a0, 0x0b) ^ aes_mul(a1, 0x0d) ^ aes_mul(a2, 0x09) ^ aes_mul(a3, 0x0e);
+    }
+}
+
+static void aes128_decrypt_block(const uint8_t key[16], const uint8_t in[16], uint8_t out[16])
+{
+    uint8_t rk[176];
+    uint8_t s[16];
+    aes128_key_expand(key, rk);
+    memcpy(s, in, 16);
+    aes_add_round_key(s, rk + 160);
+    for (int round = 9; round >= 1; round--) {
+        aes_inv_shift_rows(s);
+        aes_inv_sub_bytes(s);
+        aes_add_round_key(s, rk + round * 16);
+        aes_inv_mix_columns(s);
+    }
+    aes_inv_shift_rows(s);
+    aes_inv_sub_bytes(s);
+    aes_add_round_key(s, rk);
+    memcpy(out, s, 16);
+}
+
+static bool aes_unwrap_128(const uint8_t kek[16], const uint8_t *in,
+                           uint16_t in_len, uint8_t *out, uint16_t *out_len)
+{
+    if (in_len < 16 || (in_len & 7))
+        return false;
+
+    uint8_t a[8];
+    uint8_t r[8][8];
+    int n = in_len / 8 - 1;
+    if (n > 8)
+        return false;
+
+    memcpy(a, in, 8);
+    for (int i = 0; i < n; i++)
+        memcpy(r[i], in + 8 + i * 8, 8);
+
+    for (int j = 5; j >= 0; j--) {
+        for (int i = n - 1; i >= 0; i--) {
+            uint8_t block[16], plain[16];
+            uint64_t t = (uint64_t)(n * j + i + 1);
+            memcpy(block, a, 8);
+            for (int k = 7; k >= 0 && t; k--, t >>= 8)
+                block[k] ^= (uint8_t)(t & 0xff);
+            memcpy(block + 8, r[i], 8);
+            aes128_decrypt_block(kek, block, plain);
+            memcpy(a, plain, 8);
+            memcpy(r[i], plain + 8, 8);
+        }
+    }
+
+    static const uint8_t iv[8] = {0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6};
+    if (memcmp(a, iv, 8) != 0)
+        return false;
+
+    for (int i = 0; i < n; i++)
+        memcpy(out + i * 8, r[i], 8);
+    *out_len = (uint16_t)(n * 8);
+    return true;
+}
+
+static bool eapol_mic_ok(const uint8_t kck[16], const uint8_t *eapol,
+                         uint32_t eapol_len)
+{
+    if (eapol_len < 99)
+        return false;
+
+    uint8_t *tmp = (uint8_t *)IOMalloc(eapol_len);
+    if (!tmp)
+        return false;
+
+    memcpy(tmp, eapol, eapol_len);
+    uint8_t rx_mic[16];
+    memcpy(rx_mic, tmp + 81, sizeof(rx_mic));
+    memset(tmp + 81, 0, sizeof(rx_mic));
+
+    uint8_t mic[20];
+    kern_hmac_sha1(kck, 16, tmp, eapol_len, mic);
+    IOFree(tmp, eapol_len);
+    return memcmp(rx_mic, mic, sizeof(rx_mic)) == 0;
+}
+
+static bool extract_gtk_from_kde(const uint8_t *key_data, uint16_t key_data_len,
+                                 uint8_t gtk[32], uint8_t *gtk_len,
+                                 uint8_t *gtk_idx)
+{
+    const uint8_t rsn_gtk_oui[4] = {0x00, 0x0f, 0xac, 0x01};
+
+    for (uint16_t pos = 0; pos + 2 <= key_data_len; ) {
+        uint8_t id = key_data[pos];
+        uint8_t len = key_data[pos + 1];
+        const uint8_t *body = key_data + pos + 2;
+        if (pos + 2 + len > key_data_len)
+            break;
+
+        if (id == 0xdd && len >= 6 && memcmp(body, rsn_gtk_oui, 4) == 0) {
+            uint8_t key_len = (uint8_t)(len - 6);
+            if (key_len > 32)
+                return false;
+            *gtk_idx = body[4] & 0x3;
+            *gtk_len = key_len;
+            memcpy(gtk, body + 6, key_len);
+            return true;
+        }
+        pos += 2 + len;
+    }
+
+    return false;
+}
+
 #undef rol
 #undef blk0
 #undef blk
@@ -366,6 +577,7 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
 
 void RTW88IEEE80211::free()
 {
+    clearKeys();
     if (_connectTC) { thread_call_cancel(_connectTC); thread_call_free(_connectTC); _connectTC = nullptr; }
     if (_timer)  { _wl->removeEventSource(_timer); _timer->release();  _timer = nullptr; }
     if (_gate)   { _wl->removeEventSource(_gate);  _gate->release();   _gate = nullptr; }
@@ -382,6 +594,66 @@ void RTW88IEEE80211::free()
     }
     _bssList = nullptr;
     super::free();
+}
+
+void RTW88IEEE80211::clearKeys()
+{
+    if (_hw && _hw->ops && _hw->ops->set_key) {
+        if (_ptkConf)
+            _hw->ops->set_key(_hw, DISABLE_KEY, _vif, _sta, _ptkConf);
+        if (_gtkConf)
+            _hw->ops->set_key(_hw, DISABLE_KEY, _vif, nullptr, _gtkConf);
+    }
+
+    if (_ptkConf) {
+        IOFree(_ptkConf, sizeof(*_ptkConf));
+        _ptkConf = nullptr;
+    }
+    if (_gtkConf) {
+        IOFree(_gtkConf, sizeof(*_gtkConf));
+        _gtkConf = nullptr;
+    }
+    memset(_ptk, 0, sizeof(_ptk));
+    memset(_gtk, 0, sizeof(_gtk));
+}
+
+bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
+                                uint8_t keyidx, const uint8_t *tk, uint8_t tk_len)
+{
+    if (!_hw || !_hw->ops || !_hw->ops->set_key || !slot || !tk || tk_len == 0 || tk_len > 32)
+        return false;
+
+    if (*slot) {
+        _hw->ops->set_key(_hw, DISABLE_KEY, _vif, pairwise ? _sta : nullptr, *slot);
+        IOFree(*slot, sizeof(**slot));
+        *slot = nullptr;
+    }
+
+    struct ieee80211_key_conf *key =
+        (struct ieee80211_key_conf *)IOMallocZero(sizeof(*key));
+    if (!key)
+        return false;
+
+    key->cipher = WLAN_CIPHER_SUITE_CCMP;
+    key->keyidx = (s8)keyidx;
+    key->flags = pairwise ? IEEE80211_KEY_FLAG_PAIRWISE : 0;
+    key->keylen = tk_len;
+    key->iv_len = 8;
+    key->icv_len = 8;
+    memcpy(key->key, tk, tk_len);
+
+    int ret = _hw->ops->set_key(_hw, SET_KEY, _vif, pairwise ? _sta : nullptr, key);
+    if (ret) {
+        IOLog("rtw88: failed to install %s CCMP key ret=%d\n",
+              pairwise ? "pairwise" : "group", ret);
+        IOFree(key, sizeof(*key));
+        return false;
+    }
+
+    *slot = key;
+    IOLog("rtw88: installed %s CCMP key idx=%u hw_idx=%u\n",
+          pairwise ? "pairwise" : "group", keyidx, key->hw_key_idx);
+    return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -663,6 +935,7 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
     case 0x00C0: /* deauth */
         if (_state == RTW88_STATE_CONNECTED ||
             _state == RTW88_STATE_HANDSHAKING) {
+            clearKeys();
             _state = RTW88_STATE_IDLE;
             if (_parent)
                 _parent->setLinkStatus(kIONetworkLinkValid);
@@ -903,6 +1176,7 @@ IOReturn RTW88IEEE80211::cmdConnect(const char *ssid, const char *password)
 {
     if (_state != RTW88_STATE_IDLE) return kIOReturnBusy;
     if (!ssid) return kIOReturnBadArgument;
+    clearKeys();
 
     /* Find the SSID in our BSS list */
     IOLockLock(_bssLock);
@@ -1236,6 +1510,7 @@ IOReturn RTW88IEEE80211::cmdDisconnect()
 void RTW88IEEE80211::doDisconnect()
 {
     if (!_hw || !_vif) { _state = RTW88_STATE_IDLE; return; }
+    clearKeys();
 
     /* Send deauth frame */
     uint8_t deauth[28] = {};
@@ -1266,62 +1541,82 @@ void RTW88IEEE80211::doDisconnect()
 
 void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
 {
-    /* Minimal EAPOL-Key parser */
-    if (len < 99) return;
-    if (data[1] != 3) return; /* must be EAPOL-Key */
+    if (len < 99 || data[1] != 3)
+        return;
+
+    uint16_t eapol_body_len = (uint16_t)((data[2] << 8) | data[3]);
+    uint32_t eapol_len = 4 + eapol_body_len;
+    if (eapol_len > len || eapol_len < 99)
+        return;
 
     uint16_t key_info = (uint16_t)((data[5] << 8) | data[6]);
-    /* M1: Pairwise=1, ACK=1, MIC=0, Secure=0 */
-    bool is_m1 = (key_info & 0x0108) == 0x0108 && !(key_info & 0x0200);
-    /* M3: Pairwise=1, Install=1, ACK=1, MIC=1 */
-    bool is_m3 = (key_info & 0x01C8) == 0x01C8 && (key_info & 0x0200);
+    bool is_m1 = (key_info & 0x0088) == 0x0088 && !(key_info & 0x0100);
+    bool is_m3 = (key_info & 0x01c8) == 0x01c8;
+    uint16_t key_data_len = (uint16_t)((data[97] << 8) | data[98]);
 
-    IOLog("rtw88: EAPOL key_info=0x%04x M1=%d M3=%d\n", key_info, is_m1, is_m3);
+    IOLog("rtw88: EAPOL key_info=0x%04x key_data_len=%u M1=%d M3=%d\n",
+          key_info, key_data_len, is_m1, is_m3);
 
     if (is_m1) {
-        /* data[17..48] = ANonce */
         memcpy(_anonce, data + 17, 32);
-        /* Generate SNonce */
         read_random(_snonce, 32);
-        /* Derive PTK from PMK + ANonce + SNonce + MACs */
         derivePTK(_pmk, _anonce, _snonce, _macAddr, _targetBSS.bssid, _ptk);
-        /* Send M2 with MIC */
         memcpy(_replayCtr, data + 9, 8);
         sendEAPOLKey(2, _replayCtr, false, false, true);
     } else if (is_m3) {
-        /* Update replay counter and send M4 */
-        memcpy(_replayCtr, data + 9, 8);
-        sendEAPOLKey(4, _replayCtr, false, false, true);
+        if (!eapol_mic_ok(_ptk, data, eapol_len)) {
+            IOLog("rtw88: EAPOL M3 MIC check failed\n");
+            return;
+        }
 
-        /* Install PTK (TK is bytes 32..47 of PTK for CCMP) */
-        if (_hw && _hw->ops && _hw->ops->set_key) {
-            struct ieee80211_key_conf *key =
-                (struct ieee80211_key_conf *)IOMallocZero(
-                    sizeof(struct ieee80211_key_conf));
-            if (key) {
-                key->cipher   = WLAN_CIPHER_SUITE_CCMP;
-                key->keyidx   = 0;
-                key->flags    = IEEE80211_KEY_FLAG_PAIRWISE;
-                key->keylen   = 16;
-                memcpy(key->key, _ptk + 32, 16); /* TK */
-                _hw->ops->set_key(_hw, SET_KEY, _vif, _sta, key);
-                IOFree(key, sizeof(*key));
-                IOLog("rtw88: PTK installed\n");
+        if (99 + key_data_len > eapol_len) {
+            IOLog("rtw88: EAPOL M3 key data truncated\n");
+            return;
+        }
+
+        uint8_t gtk[32] = {};
+        uint8_t gtk_len = 0;
+        uint8_t gtk_idx = 0;
+        const uint8_t *key_data = data + 99;
+        uint8_t unwrapped[64] = {};
+        uint16_t unwrapped_len = 0;
+
+        if (key_data_len) {
+            if (key_info & 0x1000) {
+                if (!aes_unwrap_128(_ptk + 16, key_data, key_data_len,
+                                    unwrapped, &unwrapped_len)) {
+                    IOLog("rtw88: failed to unwrap GTK key data\n");
+                    return;
+                }
+                key_data = unwrapped;
+                key_data_len = unwrapped_len;
+            }
+
+            if (!extract_gtk_from_kde(key_data, key_data_len,
+                                      gtk, &gtk_len, &gtk_idx)) {
+                IOLog("rtw88: no GTK KDE found in M3 key data\n");
             }
         }
+
+        memcpy(_replayCtr, data + 9, 8);
+
+        if (!installKey(&_ptkConf, true, 0, _ptk + 32, 16))
+            return;
+        if (gtk_len && !installKey(&_gtkConf, false, gtk_idx, gtk, gtk_len))
+            return;
+
+        sendEAPOLKey(4, _replayCtr, false, false, true);
         _state = RTW88_STATE_CONNECTED;
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
-        IOLog("rtw88: WPA2 connected!\n");
+        IOLog("rtw88: WPA2 connected! gtk_len=%u gtk_idx=%u\n", gtk_len, gtk_idx);
     }
 }
 
 void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
                                     bool install, bool ack, bool mic)
 {
-    /* Build minimal EAPOL-Key response frame (Ethernet wrapped) */
-    /* 14 (eth hdr) + 4 (EAPOL hdr) + 95 (EAPOL-Key) */
-    uint8_t frame[200] = {};
+    uint8_t frame[512] = {};
     uint8_t *eth = frame;
     memcpy(eth,     _targetBSS.bssid, 6); /* DA = AP */
     memcpy(eth + 6, _macAddr, 6);          /* SA = us */
@@ -1330,7 +1625,6 @@ void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
     uint8_t *eapol = eth + 14;
     eapol[0] = 2;  /* version 2 */
     eapol[1] = 3;  /* EAPOL-Key */
-    eapol[2] = 0; eapol[3] = 95; /* length */
 
     uint8_t *key = eapol + 4;
     key[0] = 2;  /* key descriptor = RSN */
@@ -1346,18 +1640,43 @@ void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
     memcpy(key + 13, _snonce, 32);       /* key[13..44] = SNonce */
     /* key[45..60] = Key IV (zeros), key[61..68] = RSC (zeros) */
     /* key[69..76] = Reserved (zeros), key[77..92] = MIC (below) */
-    /* key[93..94] = Key Data Length = 0 (zeros) */
+
+    uint16_t key_data_len = 0;
+    if (step == 2) {
+        const uint8_t *ie = _targetBSS.ies;
+        const uint8_t *end = ie + _targetBSS.ies_len;
+        while (ie + 2 <= end) {
+            if (ie + 2 + ie[1] > end)
+                break;
+            if (ie[0] == WLAN_EID_RSN) {
+                key_data_len = (uint16_t)(2 + ie[1]);
+                if (99 + key_data_len <= sizeof(frame) - 14)
+                    memcpy(eapol + 99, ie, key_data_len);
+                else
+                    key_data_len = 0;
+                break;
+            }
+            ie += 2 + ie[1];
+        }
+    }
+
+    key[93] = (uint8_t)(key_data_len >> 8);
+    key[94] = (uint8_t)(key_data_len & 0xff);
+
+    uint16_t eapol_key_len = (uint16_t)(95 + key_data_len);
+    uint32_t eapol_total = 4 + eapol_key_len;
+    eapol[2] = (uint8_t)(eapol_key_len >> 8);
+    eapol[3] = (uint8_t)(eapol_key_len & 0xff);
 
     if (mic) {
         /* MIC = first 16 bytes of HMAC-SHA1(KCK, EAPOL frame with MIC zeroed)
-         * KCK = _ptk[0..15]; EAPOL frame starts at eapol[0], length = 4+95 = 99 */
+         * KCK = _ptk[0..15]. */
         uint8_t mic_buf[20];
-        kern_hmac_sha1(_ptk, 16, eapol, 4 + 95, mic_buf);
+        kern_hmac_sha1(_ptk, 16, eapol, eapol_total, mic_buf);
         memcpy(key + 77, mic_buf, 16);
     }
 
-    /* Transmit as 802.11 data frame */
-    uint32_t ethlen = 14 + 4 + 95; /* eth(14) + EAPOL header(4) + EAPOL-Key body(95) */
+    uint32_t ethlen = 14 + eapol_total;
     mbuf_t m = rtw88_make_packet_mbuf(frame, ethlen);
     if (!m) return;
     txDataFrame(m);
@@ -1413,7 +1732,10 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     /* 802.11 data header (ToDS: station -> AP) */
     struct ieee80211_hdr_3addr *h =
         (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
-    h->frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS);
+    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS;
+    if (_wpa2 && _ptkConf && ethertype != ETH_P_PAE)
+        fc |= IEEE80211_FCTL_PROTECTED;
+    h->frame_control = cpu_to_le16(fc);
     h->duration_id   = 0;
     memcpy(h->addr1, _targetBSS.bssid, 6); /* RA = BSSID (the AP)        */
     memcpy(h->addr2, _macAddr, 6);         /* TA = SA  (us)              */
@@ -1455,6 +1777,8 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
                                             : NL80211_BAND_2GHZ;
     info->control.vif = _vif;
     info->control.sta = _sta;
+    if (_wpa2 && _ptkConf && ethertype != ETH_P_PAE)
+        info->control.hw_key = _ptkConf;
 
     struct ieee80211_tx_control ctrl = { .sta = _sta };
     _hw->ops->tx(_hw, &ctrl, skb);
