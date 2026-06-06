@@ -598,7 +598,7 @@ void RTW88IEEE80211::free()
 
 void RTW88IEEE80211::clearKeys()
 {
-    if (_hw && _hw->ops && _hw->ops->set_key) {
+    if (_powered && _hw && _hw->ops && _hw->ops->set_key) {
         if (_ptkConf)
             _hw->ops->set_key(_hw, DISABLE_KEY, _vif, _sta, _ptkConf);
         if (_gtkConf)
@@ -745,6 +745,8 @@ IOReturn RTW88IEEE80211::start()
             RTW88_STAGE("hw->ops->start returned %d", ret);
             if (ret != 0) {
                 IOLog("rtw88: hw->ops->start failed: %d\n", ret);
+            } else {
+                _powered = true;
             }
         }
     }
@@ -759,11 +761,15 @@ void RTW88IEEE80211::stop()
     IOLog("rtw88: IEEE80211 stop\n");
     _timer->cancelTimeout();
 
-    if (_state == RTW88_STATE_CONNECTED) doDisconnect();
+    if (_state == RTW88_STATE_CONNECTED && _powered)
+        doDisconnect();
+    else
+        clearKeys();
 
     if (_vif && _hw && _hw->ops) {
-        if (_hw->ops->stop) {
+        if (_powered && _hw->ops->stop) {
             _hw->ops->stop(_hw, false);
+            _powered = false;
         }
         rtw88_unregister_vif();
         if (_hw->ops->remove_interface) {
@@ -786,20 +792,24 @@ void RTW88IEEE80211::stop()
 IOReturn RTW88IEEE80211::powerOn()
 {
     IOLog("rtw88: IEEE80211 powerOn\n");
-    if (!_rtwdev) return kIOReturnNotReady;
-    int ret = rtw_core_start(_rtwdev);
+    if (_powered) return kIOReturnSuccess;
+    if (!_hw || !_hw->ops || !_hw->ops->start) return kIOReturnNotReady;
+    int ret = _hw->ops->start(_hw);
     if (ret) {
         IOLog("rtw88: rtw_core_start failed: %d\n", ret);
         return kIOReturnError;
     }
+    _powered = true;
     return kIOReturnSuccess;
 }
 
 void RTW88IEEE80211::powerOff()
 {
     IOLog("rtw88: IEEE80211 powerOff\n");
-    if (!_rtwdev) return;
-    rtw_core_stop(_rtwdev);
+    if (!_powered) return;
+    if (_hw && _hw->ops && _hw->ops->stop)
+        _hw->ops->stop(_hw, false);
+    _powered = false;
 }
 
 /* ------------------------------------------------------------------ */

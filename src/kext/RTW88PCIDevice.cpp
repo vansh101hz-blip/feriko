@@ -338,12 +338,21 @@ void RTW88PCIDevice::teardown()
      * the output queue it services. */
     rtw88_set_tx_resume_cb(nullptr);
 
+    if (_debugTimer)
+        _debugTimer->cancelTimeout();
+    if (_intrSrc)
+        _intrSrc->disable();
+    if (_txQueue) {
+        _txQueue->stop();
+        _txQueue->flush();
+    }
+
     if (_enabled) disable(_iface);
     drainPendingFree();   /* release any bounce bufs deferred during TX ISR */
 
-    rtw88_compat_exit();
-
     if (_ieee80211)  { _ieee80211->stop(); _ieee80211->release(); _ieee80211 = nullptr; }
+
+    rtw88_compat_exit();
 
     if (_debugTimer) { _debugTimer->cancelTimeout(); _workLoop->removeEventSource(_debugTimer); _debugTimer->release(); _debugTimer = nullptr; }
     if (_intrSrc)  { _workLoop->removeEventSource(_intrSrc); _intrSrc->release();  _intrSrc = nullptr; }

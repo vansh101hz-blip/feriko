@@ -151,6 +151,7 @@ private:
     IOLock             *_lock         = nullptr;
 
     RTW88State          _state        = RTW88_STATE_IDLE;
+    bool                _powered      = false;
     uint8_t             _macAddr[6]   = {};
     uint32_t            _timeoutMs    = 0;
 

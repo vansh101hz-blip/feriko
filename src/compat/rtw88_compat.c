@@ -472,7 +472,7 @@ void rtw88_netif_napi_add(struct net_device *dev, struct napi_struct *napi, int 
 void rtw88_netif_napi_del(struct napi_struct *napi)
 {
     if (napi->thread_call) {
-        thread_call_cancel((thread_call_t)napi->thread_call);
+        thread_call_cancel_wait((thread_call_t)napi->thread_call);
         thread_call_free((thread_call_t)napi->thread_call);
         napi->thread_call = NULL;
     }
@@ -914,12 +914,21 @@ int rtw88_compat_init(void)
 
 void rtw88_compat_exit(void)
 {
+    if (g_irq_thread_call) {
+        thread_call_cancel_wait(g_irq_thread_call);
+        thread_call_free(g_irq_thread_call);
+        g_irq_thread_call = NULL;
+    }
     destroy_workqueue(system_wq);
     destroy_workqueue(system_long_wq);
     system_wq = system_long_wq = NULL;
     g_irq_handler   = NULL;
     g_irq_thread_fn = NULL;
     g_irq_dev_id    = NULL;
+    g_tx_resume_cb  = NULL;
+    g_hw_cbs        = NULL;
+    g_kext_hw       = NULL;
+    g_rtw88_vif     = NULL;
     if (rtw88_log_lock) {
         IOSimpleLockFree(rtw88_log_lock);
         rtw88_log_lock = NULL;
