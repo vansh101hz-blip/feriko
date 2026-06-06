@@ -220,13 +220,46 @@ void RTW88PCIDevice::publishHardwareIdentity()
     setName(chip);
     setProperty(kIOVendor, "Realtek");
     setProperty(kIOModel, chip);
+    setProperty(kIORevision, "rtw88");
+    setProperty(kIOBuiltin, kOSBooleanTrue);
+    setProperty(kIOLocation, "Internal");
+    setProperty("IOUserVisibleName", chip);
     setProperty("Product Name", chip);
+    setProperty("Device Name", chip);
+    setProperty("Model", chip);
+    setProperty("Vendor", "Realtek");
+
+    if (_macAddr.bytes[0] || _macAddr.bytes[1] || _macAddr.bytes[2] ||
+        _macAddr.bytes[3] || _macAddr.bytes[4] || _macAddr.bytes[5]) {
+        OSData *mac = OSData::withBytes(_macAddr.bytes, sizeof(_macAddr.bytes));
+        if (mac) {
+            setProperty(kIOMACAddress, mac);
+            mac->release();
+        }
+    }
 
     if (_iface) {
         _iface->setName(chip);
+        _iface->setProperty(kIOVendor, "Realtek");
         _iface->setProperty(kIOModel, chip);
+        _iface->setProperty(kIORevision, "rtw88");
+        _iface->setProperty(kIOBuiltin, kOSBooleanTrue);
+        _iface->setProperty(kIOPrimaryInterface, kOSBooleanTrue);
+        _iface->setProperty(kIOLocation, "Internal");
         _iface->setProperty("IOUserVisibleName", chip);
         _iface->setProperty("Product Name", chip);
+        _iface->setProperty("Device Name", chip);
+        _iface->setProperty("Model", chip);
+        _iface->setProperty("Vendor", "Realtek");
+
+        if (_macAddr.bytes[0] || _macAddr.bytes[1] || _macAddr.bytes[2] ||
+            _macAddr.bytes[3] || _macAddr.bytes[4] || _macAddr.bytes[5]) {
+            OSData *mac = OSData::withBytes(_macAddr.bytes, sizeof(_macAddr.bytes));
+            if (mac) {
+                _iface->setProperty(kIOMACAddress, mac);
+                mac->release();
+            }
+        }
     }
 }
 

@@ -42,6 +42,7 @@ struct RTW88StateResult {
     char     chip_name[32];
     uint32_t rx_byte_count;
     uint32_t tx_byte_count;
+    uint8_t  scan_offload_supported;
 };
 
 /* ------------------------------------------------------------------ */

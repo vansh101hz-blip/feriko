@@ -2385,6 +2385,9 @@ IOReturn RTW88IEEE80211::cmdGetState(struct RTW88StateResult *result)
     rtw88_get_fw_version(_rtwdev, &result->fw_version, &result->fw_sub_version);
     rtw88_get_chip_name(_rtwdev, result->chip_name, sizeof(result->chip_name));
     rtw88_get_stats(_rtwdev, &result->tx_byte_count, &result->rx_byte_count);
+    result->scan_offload_supported =
+        (_hw && _hw->ops && _hw->ops->hw_scan &&
+         rtw88_hw_scan_supported(_hw)) ? 1 : 0;
 
     return kIOReturnSuccess;
 }
