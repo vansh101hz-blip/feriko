@@ -313,7 +313,8 @@ bool RTW88PCIDevice::start(IOService *provider)
 
 void RTW88PCIDevice::debugTimerFired(IOTimerEventSource *src)
 {
-    rtw88_debug_dump_tx_state();
+    if (_txStalled || rtw88_be_tx_avail() < 64)
+        rtw88_debug_dump_tx_state();
     src->setTimeoutMS(1000);   /* re-arm */
 }
 
