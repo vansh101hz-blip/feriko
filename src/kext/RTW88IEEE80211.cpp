@@ -641,10 +641,29 @@ void RTW88IEEE80211::releaseSta()
     _staAllocSize = 0;
 }
 
+static const char *rtw88CipherName(uint32_t cipher)
+{
+    switch (cipher) {
+    case WLAN_CIPHER_SUITE_CCMP:
+        return "CCMP";
+    case WLAN_CIPHER_SUITE_TKIP:
+        return "TKIP";
+    default:
+        return "unknown";
+    }
+}
+
 bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
-                                uint8_t keyidx, const uint8_t *tk, uint8_t tk_len)
+                                uint8_t keyidx, uint32_t cipher,
+                                const uint8_t *tk, uint8_t tk_len)
 {
     if (!_hw || !_hw->ops || !_hw->ops->set_key || !slot || !tk || tk_len == 0 || tk_len > 32)
+        return false;
+    if (cipher != WLAN_CIPHER_SUITE_CCMP && cipher != WLAN_CIPHER_SUITE_TKIP)
+        return false;
+    if (cipher == WLAN_CIPHER_SUITE_CCMP && tk_len != 16)
+        return false;
+    if (cipher == WLAN_CIPHER_SUITE_TKIP && tk_len != 32)
         return false;
 
     if (*slot) {
@@ -658,18 +677,18 @@ bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
     if (!key)
         return false;
 
-    key->cipher = WLAN_CIPHER_SUITE_CCMP;
+    key->cipher = cipher;
     key->keyidx = (s8)keyidx;
     key->flags = pairwise ? IEEE80211_KEY_FLAG_PAIRWISE : 0;
     key->keylen = tk_len;
     key->iv_len = 8;
-    key->icv_len = 8;
+    key->icv_len = (cipher == WLAN_CIPHER_SUITE_TKIP) ? 4 : 8;
     memcpy(key->key, tk, tk_len);
 
     int ret = _hw->ops->set_key(_hw, SET_KEY, _vif, pairwise ? _sta : nullptr, key);
     if (ret) {
-        IOLog("rtw88: failed to install %s CCMP key ret=%d\n",
-              pairwise ? "pairwise" : "group", ret);
+        IOLog("rtw88: failed to install %s %s key ret=%d\n",
+              pairwise ? "pairwise" : "group", rtw88CipherName(cipher), ret);
         IOFree(key, sizeof(*key));
         return false;
     }
@@ -677,8 +696,9 @@ bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
     *slot = key;
     if (pairwise)
         memset(_ccmpTxPn, 0, sizeof(_ccmpTxPn));
-    IOLog("rtw88: installed %s CCMP key idx=%u hw_idx=%u\n",
-          pairwise ? "pairwise" : "group", keyidx, key->hw_key_idx);
+    IOLog("rtw88: installed %s %s key idx=%u hw_idx=%u\n",
+          pairwise ? "pairwise" : "group", rtw88CipherName(cipher),
+          keyidx, key->hw_key_idx);
     return true;
 }
 
@@ -1008,7 +1028,17 @@ static uint32_t rtw88ReadSuite(const uint8_t *p)
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-static bool rtw88RsnSupportsCcmpPsk(const uint8_t *rsn, uint8_t len)
+static void rtw88WriteSuite(uint8_t *p, uint32_t suite)
+{
+    p[0] = (uint8_t)(suite >> 24);
+    p[1] = (uint8_t)(suite >> 16);
+    p[2] = (uint8_t)(suite >> 8);
+    p[3] = (uint8_t)suite;
+}
+
+static bool rtw88RsnSelectCcmpPsk(const uint8_t *rsn, uint8_t len,
+                                  uint32_t *pairwise_cipher,
+                                  uint32_t *group_cipher)
 {
     const uint8_t *p = rsn;
     const uint8_t *end = rsn + len;
@@ -1017,7 +1047,7 @@ static bool rtw88RsnSupportsCcmpPsk(const uint8_t *rsn, uint8_t len)
         return false;
 
     p += 2; /* version */
-    (void)rtw88ReadSuite(p);
+    uint32_t group = rtw88ReadSuite(p);
     p += 4;
 
     if (p + 2 > end)
@@ -1046,7 +1076,36 @@ static bool rtw88RsnSupportsCcmpPsk(const uint8_t *rsn, uint8_t len)
             hasPsk = true;
     }
 
-    return hasCcmp && hasPsk;
+    if (!hasCcmp || !hasPsk)
+        return false;
+
+    if (group != WLAN_CIPHER_SUITE_CCMP &&
+        group != WLAN_CIPHER_SUITE_TKIP)
+        group = WLAN_CIPHER_SUITE_CCMP;
+
+    if (pairwise_cipher)
+        *pairwise_cipher = WLAN_CIPHER_SUITE_CCMP;
+    if (group_cipher)
+        *group_cipher = group;
+    return true;
+}
+
+static uint16_t rtw88BuildSelectedRsnIe(uint8_t *out, uint32_t group_cipher)
+{
+    if (group_cipher != WLAN_CIPHER_SUITE_TKIP)
+        group_cipher = WLAN_CIPHER_SUITE_CCMP;
+
+    uint8_t *p = out;
+    *p++ = WLAN_EID_RSN;
+    *p++ = 20;           /* body length */
+    *p++ = 1; *p++ = 0;  /* version */
+    rtw88WriteSuite(p, group_cipher); p += 4;
+    *p++ = 1; *p++ = 0;  /* one pairwise cipher */
+    rtw88WriteSuite(p, WLAN_CIPHER_SUITE_CCMP); p += 4;
+    *p++ = 1; *p++ = 0;  /* one AKM */
+    rtw88WriteSuite(p, 0x000FAC02); p += 4; /* PSK */
+    *p++ = 0; *p++ = 0;  /* RSN capabilities */
+    return (uint16_t)(p - out);
 }
 
 void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
@@ -1082,9 +1141,22 @@ void RTW88IEEE80211::processScanResult(struct sk_buff *skb)
             bss->channel = body[2];
         } else if (id == WLAN_EID_HT_OPERATION && len >= 1 && bss->channel == 0) {
             bss->channel = body[2];
-        } else if (id == WLAN_EID_RSN &&
-                   rtw88RsnSupportsCcmpPsk(body + 2, len)) {
-            bss->cipher = WLAN_CIPHER_SUITE_CCMP;
+        } else if (id == WLAN_EID_RSN) {
+            uint32_t pairwise = 0;
+            uint32_t group = 0;
+            if (rtw88RsnSelectCcmpPsk(body + 2, len, &pairwise, &group)) {
+                bss->cipher = pairwise;
+                bss->group_cipher = group;
+                bss->akm = 0x000FAC02; /* PSK */
+            }
+        } else if (id == WLAN_EID_VENDOR_SPECIFIC &&
+                   len >= 8 && body[2] == 0x00 && body[3] == 0x50 &&
+                   body[4] == 0xf2 && body[5] == 0x01 &&
+                   bss->cipher == 0) {
+            /* Legacy WPA IE. Keep this as scan metadata only; association
+             * still prefers RSN/WPA2 when the AP advertises it. */
+            bss->cipher = WLAN_CIPHER_SUITE_TKIP;
+            bss->group_cipher = WLAN_CIPHER_SUITE_TKIP;
             bss->akm    = 0x000FAC02; /* PSK */
         }
 
@@ -1842,18 +1914,13 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
     memcpy(body, wme_info, sizeof(wme_info));
     body += sizeof(wme_info);
 
-    /* Copy RSN IE from beacon if WPA2 */
+    /* Advertise the cipher choice we actually implement: pairwise CCMP/AES
+     * with the AP's selected group cipher.  Mixed TKIP+AES APs often list
+     * both pairwise ciphers; copying that raw IE can make the AP pick a path
+     * we do not want. */
     if (_wpa2) {
-        const uint8_t *ie = _targetBSS.ies;
-        const uint8_t *end = ie + _targetBSS.ies_len;
-        while (ie + 2 <= end) {
-            if (ie[0] == WLAN_EID_RSN) {
-                memcpy(body, ie, 2 + ie[1]);
-                body += 2 + ie[1];
-                break;
-            }
-            ie += 2 + ie[1];
-        }
+        uint16_t rsn_len = rtw88BuildSelectedRsnIe(body, _targetBSS.group_cipher);
+        body += rsn_len;
     }
 
     *len = (uint32_t)(body - buf);
@@ -1868,6 +1935,37 @@ IOReturn RTW88IEEE80211::cmdDisconnect()
 {
     if (_state == RTW88_STATE_IDLE) return kIOReturnSuccess;
     doDisconnect();
+    return kIOReturnSuccess;
+}
+
+IOReturn RTW88IEEE80211::cmdPowerOn()
+{
+    IOReturn ret = powerOn();
+    if (ret == kIOReturnSuccess && _state == RTW88_STATE_DISCONNECTING)
+        _state = RTW88_STATE_IDLE;
+    return ret;
+}
+
+IOReturn RTW88IEEE80211::cmdPowerOff()
+{
+    if (_state == RTW88_STATE_SCANNING)
+        abortActiveScan(true);
+
+    if (_state == RTW88_STATE_CONNECTED ||
+        _state == RTW88_STATE_AUTHENTICATING ||
+        _state == RTW88_STATE_ASSOCIATING ||
+        _state == RTW88_STATE_HANDSHAKING)
+        doDisconnect();
+    else {
+        clearKeys();
+        releaseSta();
+    }
+
+    powerOff();
+    _state = RTW88_STATE_IDLE;
+    _scanReturnState = RTW88_STATE_IDLE;
+    if (_parent)
+        _parent->setLinkStatus(kIONetworkLinkValid);
     return kIOReturnSuccess;
 }
 
@@ -1973,9 +2071,13 @@ void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
 
         memcpy(_replayCtr, data + 9, 8);
 
-        if (!installKey(&_ptkConf, true, 0, _ptk + 32, 16))
+        if (!installKey(&_ptkConf, true, 0, WLAN_CIPHER_SUITE_CCMP,
+                        _ptk + 32, 16))
             return;
-        if (gtk_len && !installKey(&_gtkConf, false, gtk_idx, gtk, gtk_len))
+        uint32_t groupCipher = (_targetBSS.group_cipher == WLAN_CIPHER_SUITE_TKIP) ?
+            WLAN_CIPHER_SUITE_TKIP : WLAN_CIPHER_SUITE_CCMP;
+        if (gtk_len && !installKey(&_gtkConf, false, gtk_idx, groupCipher,
+                                   gtk, gtk_len))
             return;
 
         sendEAPOLKey(4, _replayCtr, false, false, true);
@@ -2017,21 +2119,9 @@ void RTW88IEEE80211::sendEAPOLKey(int step, const uint8_t *replay_counter,
 
     uint16_t key_data_len = 0;
     if (step == 2) {
-        const uint8_t *ie = _targetBSS.ies;
-        const uint8_t *end = ie + _targetBSS.ies_len;
-        while (ie + 2 <= end) {
-            if (ie + 2 + ie[1] > end)
-                break;
-            if (ie[0] == WLAN_EID_RSN) {
-                key_data_len = (uint16_t)(2 + ie[1]);
-                if (99 + key_data_len <= sizeof(frame) - 14)
-                    memcpy(eapol + 99, ie, key_data_len);
-                else
-                    key_data_len = 0;
-                break;
-            }
-            ie += 2 + ie[1];
-        }
+        key_data_len = rtw88BuildSelectedRsnIe(eapol + 99, _targetBSS.group_cipher);
+        if (99 + key_data_len > sizeof(frame) - 14)
+            key_data_len = 0;
     }
 
     key[93] = (uint8_t)(key_data_len >> 8);
@@ -2391,6 +2481,7 @@ IOReturn RTW88IEEE80211::cmdGetState(struct RTW88StateResult *result)
     result->scan_offload_supported =
         (_hw && _hw->ops && _hw->ops->hw_scan &&
          rtw88_hw_scan_supported(_hw)) ? 1 : 0;
+    result->powered = _powered ? 1 : 0;
 
     return kIOReturnSuccess;
 }

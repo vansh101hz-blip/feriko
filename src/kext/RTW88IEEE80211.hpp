@@ -40,7 +40,8 @@ struct RTW88BSS {
     uint16_t freq;
     uint8_t  channel;
     uint32_t capabilities;
-    uint32_t cipher;      /* WLAN_CIPHER_SUITE_* */
+    uint32_t cipher;       /* selected pairwise WLAN_CIPHER_SUITE_* */
+    uint32_t group_cipher; /* selected group WLAN_CIPHER_SUITE_* */
     uint32_t akm;
     uint32_t last_seen_scan;
     /* Raw IE data for association */
@@ -92,6 +93,8 @@ public:
     IOReturn  cmdScan();
     IOReturn  cmdConnect(const char *ssid, const char *password);
     IOReturn  cmdDisconnect();
+    IOReturn  cmdPowerOn();
+    IOReturn  cmdPowerOff();
     IOReturn  cmdGetState(struct RTW88StateResult *result);
     IOReturn  cmdGetBSSList(uint8_t *buf, uint32_t *len);
     IOReturn  cmdGetRSSI(int *rssi);
@@ -112,7 +115,8 @@ private:
     bool      abortActiveScan(bool waitForIdle);
     void      restoreConnectedChannel();
     bool      installKey(struct ieee80211_key_conf **slot, bool pairwise,
-                         uint8_t keyidx, const uint8_t *tk, uint8_t tk_len);
+                         uint8_t keyidx, uint32_t cipher,
+                         const uint8_t *tk, uint8_t tk_len);
 
     bool      buildAssocReq(uint8_t *buf, uint32_t *len);
     bool      buildAuthReq(uint8_t *buf, uint32_t *len);
