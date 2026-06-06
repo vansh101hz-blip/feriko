@@ -615,6 +615,8 @@ void RTW88IEEE80211::clearKeys()
     }
     memset(_ptk, 0, sizeof(_ptk));
     memset(_gtk, 0, sizeof(_gtk));
+    memset(_ccmpTxPn, 0, sizeof(_ccmpTxPn));
+    _rxCcmpIvSkipLogged = false;
 }
 
 bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
@@ -651,6 +653,8 @@ bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
     }
 
     *slot = key;
+    if (pairwise)
+        memset(_ccmpTxPn, 0, sizeof(_ccmpTxPn));
     IOLog("rtw88: installed %s CCMP key idx=%u hw_idx=%u\n",
           pairwise ? "pairwise" : "group", keyidx, key->hw_key_idx);
     return true;
@@ -1054,9 +1058,24 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
     struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
     uint16_t hdrlen = ieee80211_get_hdrlen_from_skb(skb);
 
-    /* Check for LLC/SNAP */
-    const uint8_t *llc = skb->data + hdrlen;
-    if (skb->len < (uint32_t)(hdrlen + 8)) { kfree_skb(skb); return; }
+    /* Check for LLC/SNAP. Decrypted CCMP frames may still include the
+     * 8-byte CCMP header before the plaintext LLC/SNAP bytes. */
+    uint32_t payload_off = hdrlen;
+    if (skb->len < payload_off + 8) { kfree_skb(skb); return; }
+    const uint8_t *llc = skb->data + payload_off;
+    if ((llc[0] != 0xAA || llc[1] != 0xAA || llc[2] != 0x03) &&
+        ieee80211_has_protected(hdr->frame_control) &&
+        skb->len >= payload_off + 8 + 8) {
+        const uint8_t *ccmp_llc = skb->data + payload_off + 8;
+        if (ccmp_llc[0] == 0xAA && ccmp_llc[1] == 0xAA && ccmp_llc[2] == 0x03) {
+            payload_off += 8;
+            llc = ccmp_llc;
+            if (!_rxCcmpIvSkipLogged) {
+                IOLog("rtw88: rx protected data includes CCMP IV, skipping it\n");
+                _rxCcmpIvSkipLogged = true;
+            }
+        }
+    }
 
     /* LLC SNAP: AA AA 03 00 00 00 ETHERTYPE */
     uint16_t ethertype = 0;
@@ -1064,14 +1083,14 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
         ethertype = (uint16_t)((llc[6] << 8) | llc[7]);
         /* Check for EAPOL during handshake */
         if (ethertype == ETH_P_PAE && _state == RTW88_STATE_HANDSHAKING) {
-            handleEAPOL(llc + 8, skb->len - hdrlen - 8);
+            handleEAPOL(llc + 8, skb->len - payload_off - 8);
             kfree_skb(skb);
             return;
         }
     }
 
     /* Build Ethernet frame: [dst(6)][src(6)][ethertype(2)][payload] */
-    uint32_t paylen = skb->len - hdrlen - 8; /* strip LLC/SNAP */
+    uint32_t paylen = skb->len - payload_off - 8; /* strip 802.11/CCMP/LLC */
     uint32_t ethlen = 14 + paylen;
 
     /* Allocate the input mbuf via IONetworkController::allocatePacket (through
@@ -1733,8 +1752,9 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     uint8_t eh[14];
     if (mbuf_copydata(m, 0, 14, eh) != 0) { mbuf_freem(m); return false; }
     uint16_t ethertype = (uint16_t)((eh[12] << 8) | eh[13]);
+    bool protected_frame = _wpa2 && _ptkConf && ethertype != ETH_P_PAE;
 
-    uint32_t framelen = 24 + 8 + paylen;
+    uint32_t framelen = 24 + (protected_frame ? 8 : 0) + 8 + paylen;
     struct sk_buff *skb = alloc_skb(framelen + 128, GFP_ATOMIC);
     if (!skb) { mbuf_freem(m); return false; }
     skb_reserve(skb, 128);  /* TX descriptor headroom */
@@ -1743,7 +1763,7 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     struct ieee80211_hdr_3addr *h =
         (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
     uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS;
-    if (_wpa2 && _ptkConf && ethertype != ETH_P_PAE)
+    if (protected_frame)
         fc |= IEEE80211_FCTL_PROTECTED;
     h->frame_control = cpu_to_le16(fc);
     h->duration_id   = 0;
@@ -1754,6 +1774,23 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
      * avoid the AP's duplicate-detection filter discarding subsequent frames.
      * mac80211 would do this in the real stack; we must do it ourselves. */
     h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+
+    if (protected_frame) {
+        for (int i = 0; i < 6; i++) {
+            if (++_ccmpTxPn[i] != 0)
+                break;
+        }
+
+        uint8_t *ccmp = skb_put(skb, 8);
+        ccmp[0] = _ccmpTxPn[0];
+        ccmp[1] = _ccmpTxPn[1];
+        ccmp[2] = 0x00;
+        ccmp[3] = (uint8_t)(0x20 | (((uint8_t)_ptkConf->keyidx & 0x3) << 6));
+        ccmp[4] = _ccmpTxPn[2];
+        ccmp[5] = _ccmpTxPn[3];
+        ccmp[6] = _ccmpTxPn[4];
+        ccmp[7] = _ccmpTxPn[5];
+    }
 
     /* RFC 1042 LLC/SNAP header */
     uint8_t *snap = skb_put(skb, 8);
@@ -1787,7 +1824,7 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
                                             : NL80211_BAND_2GHZ;
     info->control.vif = _vif;
     info->control.sta = _sta;
-    if (_wpa2 && _ptkConf && ethertype != ETH_P_PAE)
+    if (protected_frame)
         info->control.hw_key = _ptkConf;
 
     struct ieee80211_tx_control ctrl = { .sta = _sta };

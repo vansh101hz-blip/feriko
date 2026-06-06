@@ -173,6 +173,8 @@ private:
     uint8_t  _anonce[32] = {};
     uint8_t  _snonce[32] = {};
     uint8_t  _replayCtr[8] = {};
+    uint8_t  _ccmpTxPn[6] = {};
+    bool     _rxCcmpIvSkipLogged = false;
     bool     _wpa2     = false;
 
     /* Sequence number for TX frames */
