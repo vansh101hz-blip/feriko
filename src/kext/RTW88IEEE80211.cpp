@@ -385,9 +385,9 @@ static bool aes_unwrap_128(const uint8_t kek[16], const uint8_t *in,
         return false;
 
     uint8_t a[8];
-    uint8_t r[8][8];
+    uint8_t r[32][8];
     int n = in_len / 8 - 1;
-    if (n > 8)
+    if (n <= 0 || n > 32)
         return false;
 
     memcpy(a, in, 8);
@@ -2049,7 +2049,7 @@ void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
         uint8_t gtk_len = 0;
         uint8_t gtk_idx = 0;
         const uint8_t *key_data = data + 99;
-        uint8_t unwrapped[64] = {};
+        uint8_t unwrapped[256] = {};
         uint16_t unwrapped_len = 0;
 
         if (key_data_len) {
