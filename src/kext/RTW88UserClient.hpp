@@ -21,6 +21,8 @@ enum RTW88UserClientSelector {
     kRTW88GetRSSI     = 5,
     kRTW88SetDebug    = 6,
     kRTW88GetLog      = 7,
+    kRTW88PowerOn     = 8,
+    kRTW88PowerOff    = 9,
     kRTW88NumSelectors
 };
 
@@ -43,6 +45,7 @@ struct RTW88StateResult {
     uint32_t rx_byte_count;
     uint32_t tx_byte_count;
     uint8_t  scan_offload_supported;
+    uint8_t  powered;
 };
 
 /* ------------------------------------------------------------------ */
@@ -83,6 +86,10 @@ private:
                                IOExternalMethodArguments *args);
     static IOReturn sGetLog(RTW88UserClient *target, void *ref,
                              IOExternalMethodArguments *args);
+    static IOReturn sPowerOn(RTW88UserClient *target, void *ref,
+                             IOExternalMethodArguments *args);
+    static IOReturn sPowerOff(RTW88UserClient *target, void *ref,
+                              IOExternalMethodArguments *args);
 
     static const IOExternalMethodDispatch sMethods[kRTW88NumSelectors];
 

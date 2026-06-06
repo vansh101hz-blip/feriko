@@ -40,6 +40,12 @@ const IOExternalMethodDispatch RTW88UserClient::sMethods[kRTW88NumSelectors] = {
     /* kRTW88GetLog: output = log bytes */
     { (IOExternalMethodAction)&RTW88UserClient::sGetLog,
       0, 0, 0, kIOUCVariableStructureSize },
+    /* kRTW88PowerOn */
+    { (IOExternalMethodAction)&RTW88UserClient::sPowerOn,
+      0, 0, 0, 0 },
+    /* kRTW88PowerOff */
+    { (IOExternalMethodAction)&RTW88UserClient::sPowerOff,
+      0, 0, 0, 0 },
 };
 
 /* ------------------------------------------------------------------ */
@@ -237,4 +243,18 @@ IOReturn RTW88UserClient::sGetLog(RTW88UserClient *uc, void *ref,
     
     args->structureOutputSize = read;
     return kIOReturnSuccess;
+}
+
+IOReturn RTW88UserClient::sPowerOn(RTW88UserClient *uc, void *ref,
+                                   IOExternalMethodArguments *args)
+{
+    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnOffline;
+    return uc->_provider->get80211()->cmdPowerOn();
+}
+
+IOReturn RTW88UserClient::sPowerOff(RTW88UserClient *uc, void *ref,
+                                    IOExternalMethodArguments *args)
+{
+    if (!uc->_provider || !uc->_provider->get80211()) return kIOReturnOffline;
+    return uc->_provider->get80211()->cmdPowerOff();
 }

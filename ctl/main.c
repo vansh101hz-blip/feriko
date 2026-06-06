@@ -23,6 +23,8 @@ enum {
     kRTW88GetRSSI     = 5,
     kRTW88SetDebug    = 6,
     kRTW88GetLog      = 7,
+    kRTW88PowerOn     = 8,
+    kRTW88PowerOff    = 9,
 };
 
 struct RTW88ConnectArgs {
@@ -43,6 +45,7 @@ struct RTW88StateResult {
     uint32_t rx_byte_count;
     uint32_t tx_byte_count;
     uint8_t  scan_offload_supported;
+    uint8_t  powered;
 };
 
 static const char *state_name(uint32_t s)
@@ -271,6 +274,7 @@ static int cmd_status(io_connect_t conn)
            result.mac_addr[3], result.mac_addr[4], result.mac_addr[5]);
     printf("Firmware:   v%u.%u\n", result.fw_version, result.fw_sub_version);
     printf("Scan offld: %s\n", result.scan_offload_supported ? "yes" : "no");
+    printf("Power:      %s\n", result.powered ? "on" : "off");
     
     if (result.state == 5) {
         printf("SSID:       %s\n", result.ssid[0] ? result.ssid : "(unknown)");
@@ -314,6 +318,20 @@ static int cmd_debug(io_connect_t conn, int level)
     return 0;
 }
 
+static int cmd_power(io_connect_t conn, int on)
+{
+    kern_return_t kr = IOConnectCallStructMethod(conn,
+                                                  on ? kRTW88PowerOn : kRTW88PowerOff,
+                                                  NULL, 0, NULL, NULL);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "rtw88ctl: power %s failed: %s\n",
+                on ? "on" : "off", mach_error_string(kr));
+        return 1;
+    }
+    printf("Power %s\n", on ? "on" : "off");
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Usage                                                               */
 /* ------------------------------------------------------------------ */
@@ -328,6 +346,7 @@ static void usage(const char *argv0)
         "  list                     Show last scan results without re-scanning\n"
         "  connect <ssid> [pass]    Connect to a network\n"
         "  disconnect               Disconnect\n"
+        "  power on|off             Toggle IEEE80211 radio power\n"
         "  status                   Show current connection status\n"
         "  log                      Dump driver log buffer\n"
         "  debug <level>            Set debug level (0=err 1=warn 2=info 3=dbg)\n"
@@ -383,6 +402,14 @@ int main(int argc, char *argv[])
 
     } else if (strcmp(cmd, "disconnect") == 0) {
         ret = cmd_disconnect(conn);
+
+    } else if (strcmp(cmd, "power") == 0) {
+        if (argc < 3 || (strcmp(argv[2], "on") != 0 && strcmp(argv[2], "off") != 0)) {
+            fprintf(stderr, "rtw88ctl: power requires on or off\n");
+            ret = 1;
+        } else {
+            ret = cmd_power(conn, strcmp(argv[2], "on") == 0);
+        }
 
     } else if (strcmp(cmd, "status") == 0) {
         ret = cmd_status(conn);
