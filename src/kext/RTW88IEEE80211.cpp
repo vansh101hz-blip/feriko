@@ -1409,7 +1409,7 @@ void RTW88IEEE80211::scanDone(bool aborted)
 
 IOReturn RTW88IEEE80211::cmdScan()
 {
-    if (_state != RTW88_STATE_IDLE && _state != RTW88_STATE_CONNECTED)
+    if (_state != RTW88_STATE_IDLE)
         return kIOReturnBusy;
     if (!_hw || !_hw->ops) return kIOReturnNotReady;
     RTW88State returnState = _state;

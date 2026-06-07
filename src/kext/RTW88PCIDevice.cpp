@@ -21,6 +21,9 @@ extern "C" boolean_t preemption_enabled(void);
 #define super IOEthernetController
 OSDefineMetaClassAndStructors(RTW88PCIDevice, IOEthernetController)
 
+static constexpr unsigned int kRTW88TxStallAvail = 96;
+static constexpr unsigned int kRTW88TxResumeAvail = 160;
+
 /* ------------------------------------------------------------------ */
 /*  PCI ops shim (C linkage, called from driver C code)                */
 /* ------------------------------------------------------------------ */
@@ -401,7 +404,10 @@ bool RTW88PCIDevice::start(IOService *provider)
 
 void RTW88PCIDevice::debugTimerFired(IOTimerEventSource *src)
 {
-    if (_txStalled || rtw88_be_tx_avail() < 64)
+    unsigned int avail = rtw88_be_tx_avail();
+    if (_txStalled && avail >= kRTW88TxResumeAvail)
+        resumeTxIfStalled();
+    if (_txStalled || avail < kRTW88TxStallAvail)
         rtw88_debug_dump_tx_state();
     src->setTimeoutMS(1000);   /* re-arm */
 }
@@ -605,7 +611,7 @@ UInt32 RTW88PCIDevice::outputPacket(mbuf_t m, void *param)
      * after tx_isr frees slots) re-services the queue.  Threshold leaves
      * headroom so rtw_tx never actually hits -ENOSPC.
      */
-    if (rtw88_be_tx_avail() < 32) {
+    if (rtw88_be_tx_avail() < kRTW88TxStallAvail) {
         _txStalled = true;
         return kIOReturnOutputStall;
     }
@@ -616,7 +622,7 @@ void RTW88PCIDevice::resumeTxIfStalled()
 {
     /* Runs on the IRQ bottom-half thread (no rtw88 locks held). Use async
      * service so we never block on the output-queue gate from here. */
-    if (_txStalled && rtw88_be_tx_avail() >= 64) {
+    if (_txStalled && rtw88_be_tx_avail() >= kRTW88TxResumeAvail) {
         _txStalled = false;
         if (_txQueue)
             _txQueue->service(IOBasicOutputQueue::kServiceAsync);
