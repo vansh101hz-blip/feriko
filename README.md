@@ -11,18 +11,17 @@ Feixiao aims to support the following Realtek chipsets:
 - RTL8812AE
 - RTL8814AE
 
-*Note: USB and SDIO variants are currently unsupported.*
+*Note: USB and SDIO variants are unsupported, and are not planned to be supported.*
 
 ## Features
 
 - Native scanning of 2.4GHz and 5GHz bands.
-- Connection to Open and WPA2 (CCMP/PSK) networks.
-- Full 802.11n / 802.11ac hardware rate configuration using a `mac80211` compatibility shim.
-- Custom `rtw88ctl` command-line utility to control the driver.
+- Connection to Open and WPA/WPA2 (incl. mixed modes) (CCMP/PSK/TKIP/AES/TKIP+AES) networks.
+- Custom `rtw88ctl` command-line utility to control the driver, with possibility to use [Starskiff](https://github.com/thegwchr/Starskiff) as GUI alternative
 
 ## Build Instructions
 
-To build Feixiao from source, you will need the rtw88 driver from Linux kernel source,Xcode Command Line Tools and the macOS Kernel SDK.
+To build Feixiao from source, you will need the rtw88 driver from Linux kernel source, Xcode Command Line Tools and the macOS Kernel SDK.
 
 ```sh
 # Clone the repository
@@ -87,9 +86,15 @@ The compiled kernel extension (`rtw88.kext`) and the command-line utility (`rtw8
 
 ## Troubleshooting
 
-You can view driver logs using the `rtw88ctl` tool or `dmesg`:
+You can view driver logs using `dmesg` if you're injecting it as pre-link (OpenCore):
 ```sh
-./build/out/rtw88ctl log
+dmesg | grep -i rtw88
+```
+
+or, if you're loading via `kextload/kmutil`:
+
+```sh
+log stream --predicate 'process == "kernel" and (eventMessage contains "rtw88" or message contains "rtw88")' --info
 ```
 
 If you encounter kernel panics or connection failures, ensure you are using the latest commit and that your specific card's PCI ID is bound to the driver.
