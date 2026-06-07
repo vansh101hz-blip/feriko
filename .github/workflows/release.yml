@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       changelog:
-        description: Change log
+        description: Change log; use \n for line breaks
         required: true
         type: string
 
@@ -40,22 +40,22 @@ jobs:
         run: |
           cd Feixiao
           python3 << 'EOF' >> $GITHUB_OUTPUT
-import re, sys
-with open('rtw88.kext/Contents/Info.plist', 'r') as f:
-    text = f.read()
-m = re.search(r'<key>CFBundleVersion</key>\s*<string>([0-9.]+)</string>', text)
-if not m: sys.exit(1)
-old = m.group(1)
-parts = old.split('.')
-new = f'{parts[0]}.{parts[1]}.{int(parts[2]) + 1}'
-text = re.sub(r'(<key>CFBundleVersion</key>\s*<string>)[0-9.]+(</string>)',  fr'\g<1>{new}\g<2>', text)
-text = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>)[0-9.]+(</string>)', fr'\g<1>{new}\g<2>', text)
-text = re.sub(r'(<key>OSBundleCompatibleVersion</key>\s*<string>)[0-9.]+(</string>)', fr'\g<1>{new}\g<2>', text)
-with open('rtw88.kext/Contents/Info.plist', 'w') as f:
-    f.write(text)
-print(f'old={old}')
-print(f'new={new}')
-EOF
+          import re, sys
+          with open('rtw88.kext/Contents/Info.plist', 'r') as f:
+              text = f.read()
+          m = re.search(r'<key>CFBundleVersion</key>\s*<string>([0-9.]+)</string>', text)
+          if not m: sys.exit(1)
+          old = m.group(1)
+          parts = old.split('.')
+          new = f'{parts[0]}.{parts[1]}.{int(parts[2]) + 1}'
+          text = re.sub(r'(<key>CFBundleVersion</key>\s*<string>)[0-9.]+(</string>)',  fr'\g<1>{new}\g<2>', text)
+          text = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>)[0-9.]+(</string>)', fr'\g<1>{new}\g<2>', text)
+          text = re.sub(r'(<key>OSBundleCompatibleVersion</key>\s*<string>)[0-9.]+(</string>)', fr'\g<1>{new}\g<2>', text)
+          with open('rtw88.kext/Contents/Info.plist', 'w') as f:
+              f.write(text)
+          print(f'old={old}')
+          print(f'new={new}')
+          EOF
 
       - name: Commit, tag, and push
         run: |
@@ -78,17 +78,29 @@ EOF
           echo "uuid=$(dwarfdump --uuid Feixiao/build/out/rtw88.kext/Contents/MacOS/rtw88 | awk '{print $2}')" >> $GITHUB_OUTPUT
 
       - name: Create release zip
+        id: zip
         run: |
           cd Feixiao/build/out
           zipname="Feixiao_v${{ steps.version.outputs.new }}_${{ steps.ids.outputs.uuid }}.zip"
           zip -r "${{ runner.temp }}/$zipname" rtw88.kext rtw88ctl
           echo "zipname=$zipname" >> $GITHUB_OUTPUT
 
+      - name: Prepare release notes
+        env:
+          CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          python3 << 'EOF'
+          import os
+          from pathlib import Path
+
+          changelog = os.environ["CHANGELOG"].replace("\\n", "\n")
+          Path(os.environ["RUNNER_TEMP"], "release-notes.md").write_text(changelog + "\n")
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.new }}
           name: Feixiao v${{ steps.version.outputs.new }}
-          body: |
-            ${{ inputs.changelog }}
-          files: ${{ runner.temp }}/Feixiao_v${{ steps.version.outputs.new }}_${{ steps.ids.outputs.uuid }}.zip
+          body_path: ${{ runner.temp }}/release-notes.md
+          files: ${{ runner.temp }}/${{ steps.zip.outputs.zipname }}
