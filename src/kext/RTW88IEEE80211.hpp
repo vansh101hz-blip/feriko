@@ -128,6 +128,7 @@ private:
                             bool install, bool ack, bool mic);
 
     /* A-MPDU BlockAck (aggregation) negotiation */
+    bool      htAllowed() const;   /* HT/VHT/A-MPDU usable on this link? */
     void      startTxAggregation();
     void      sendAddbaRequest(uint8_t tid);
     void      sendAddbaResponse(uint8_t tid, uint8_t dialog,

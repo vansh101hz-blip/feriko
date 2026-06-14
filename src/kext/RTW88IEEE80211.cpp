@@ -2084,7 +2084,7 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
                                           : NL80211_BAND_2GHZ;
             struct ieee80211_supported_band *sband =
                 (_hw->wiphy) ? _hw->wiphy->bands[sta_band] : nullptr;
-            if (sband) {
+            if (htAllowed() && sband) {
                 _sta->deflink.ht_cap = sband->ht_cap;
                 _sta->deflink.ht_cap.cap &=
                     ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
@@ -2221,7 +2221,7 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
     struct ieee80211_supported_band *sband =
         (_hw && _hw->wiphy) ? _hw->wiphy->bands[band] : nullptr;
 
-    if (sband && sband->ht_cap.ht_supported) {
+    if (htAllowed() && sband && sband->ht_cap.ht_supported) {
         const struct ieee80211_sta_ht_cap *ht = &sband->ht_cap;
         body[0] = WLAN_EID_HT_CAPABILITY;
         body[1] = 26;
@@ -2246,7 +2246,8 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
         body += 2 + 26;
     }
 
-    if (band == NL80211_BAND_5GHZ && sband && sband->vht_cap.vht_supported) {
+    if (htAllowed() && band == NL80211_BAND_5GHZ &&
+        sband && sband->vht_cap.vht_supported) {
         const struct ieee80211_sta_vht_cap *vht = &sband->vht_cap;
         body[0] = WLAN_EID_VHT_CAPABILITY;
         body[1] = 12;
@@ -2613,9 +2614,22 @@ void RTW88IEEE80211::sendAddbaResponse(uint8_t tid, uint8_t dialog,
     txMgmtFrame(f, sizeof(f));
 }
 
+/* HT/VHT and A-MPDU are not used with TKIP.  An AP whose BSS uses TKIP
+ * (pairwise or group cipher) operates in a non-HT mode; advertising HT to it
+ * stalls the 4-way handshake or draws a deauth.  Open and CCMP links use HT. */
+bool RTW88IEEE80211::htAllowed() const
+{
+    /* TKIP as either the pairwise or group cipher rules out HT (open and CCMP
+     * links are fine).  _targetBSS.cipher/group_cipher are 0 for open networks. */
+    if (_targetBSS.cipher       == WLAN_CIPHER_SUITE_TKIP) return false;
+    if (_targetBSS.group_cipher == WLAN_CIPHER_SUITE_TKIP) return false;
+    return true;
+}
+
 void RTW88IEEE80211::startTxAggregation()
 {
     if (_txBaActive) return;
+    if (!htAllowed()) return;
     if (!_sta || !_sta->deflink.ht_cap.ht_supported) return;
     IOLog("rtw88: starting TX A-MPDU — sending ADDBA request (tid=%u)\n", _baTid);
     sendAddbaRequest(_baTid);
@@ -2774,19 +2788,23 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     uint16_t ethertype = (uint16_t)((eh[12] << 8) | eh[13]);
     bool protected_frame = _wpa2 && _ptkConf && ethertype != ETH_P_PAE;
 
-    /* QoS Data frame: 24-byte base header + 2-byte QoS Control. A-MPDU and
-     * BlockAck are strictly per-TID, so aggregation requires QoS Data (a plain
-     * Data frame carries no TID and can never be aggregated). */
-    uint32_t framelen = 26 + (protected_frame ? 8 : 0) + 8 + paylen;
+    /* Use a QoS Data frame (24-byte header + 2-byte QoS Control) when HT is in
+     * use — A-MPDU/BlockAck is strictly per-TID and a plain Data frame carries
+     * no TID.  TKIP links (where HT is disallowed) fall back to a plain non-QoS
+     * Data frame, the proven legacy path. */
+    bool qos = htAllowed();
+    uint32_t hlen = qos ? 26 : 24;
+    uint32_t framelen = hlen + (protected_frame ? 8 : 0) + 8 + paylen;
     struct sk_buff *skb = alloc_skb(framelen + 128, GFP_ATOMIC);
     if (!skb) { mbuf_freem(m); return false; }
     skb_reserve(skb, 128);  /* TX descriptor headroom */
 
-    /* 802.11 QoS Data header (ToDS: station -> AP) */
+    /* 802.11 data header (ToDS: station -> AP) */
     struct ieee80211_hdr_3addr *h =
         (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
-    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_DATA |
-                  IEEE80211_FCTL_TODS;
+    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS;
+    if (qos)
+        fc |= IEEE80211_STYPE_QOS_DATA;
     if (protected_frame)
         fc |= IEEE80211_FCTL_PROTECTED;
     h->frame_control = cpu_to_le16(fc);
@@ -2794,16 +2812,19 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     memcpy(h->addr1, _targetBSS.bssid, 6); /* RA = BSSID (the AP)        */
     memcpy(h->addr2, _macAddr, 6);         /* TA = SA  (us)              */
     memcpy(h->addr3, eh, 6);               /* DA = Ethernet destination  */
-    /* Sequence number from the per-TID data space (kept separate from the
-     * mgmt counter so the TID-0 BlockAck window stays gap-free).  rtw88 uses
-     * this header SN for data frames (no hw-assigned SN on the data path). */
-    h->seq_ctrl = cpu_to_le16((uint16_t)(_dataSeq++ & 0xFFF) << 4);
+    /* Each data frame needs a unique sequence number.  QoS data uses a
+     * dedicated per-TID space so the BlockAck window stays gap-free; non-QoS
+     * shares the mgmt counter (legacy behaviour).  rtw88 uses this header SN
+     * for data frames (no hw-assigned SN on the data path). */
+    h->seq_ctrl = cpu_to_le16((uint16_t)((qos ? _dataSeq++ : _txSeq++) & 0xFFF) << 4);
 
-    /* QoS Control (2 bytes, LE): TID in bits 0-3 (BE = 0), Normal-Ack policy,
-     * no A-MSDU.  Value 0 for TID 0 / normal ack. */
-    uint8_t *qos = skb_put(skb, 2);
-    qos[0] = (uint8_t)(_baTid & IEEE80211_QOS_CTL_TID_MASK);
-    qos[1] = 0;
+    /* QoS Control (2 bytes, LE): TID in bits 0-3 (BE = 0), Normal-Ack, no
+     * A-MSDU. */
+    if (qos) {
+        uint8_t *qosc = skb_put(skb, 2);
+        qosc[0] = (uint8_t)(_baTid & IEEE80211_QOS_CTL_TID_MASK);
+        qosc[1] = 0;
+    }
 
     if (protected_frame) {
         for (int i = 0; i < 6; i++) {
@@ -2854,7 +2875,7 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
      * aggregation: rtw88 then sets the descriptor's AGG_EN bit and the hardware
      * builds A-MPDUs. (rtw_tx reads this flag directly; the txq/RTW_TXQ_AMPDU
      * path is unused by this port.) */
-    if (_txBaActive)
+    if (qos && _txBaActive)
         info->flags |= IEEE80211_TX_CTL_AMPDU;
     info->band  = (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ
                                             : NL80211_BAND_2GHZ;
