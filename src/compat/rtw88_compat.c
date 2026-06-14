@@ -1179,24 +1179,17 @@ void rtw88_connect_hw_setup(struct ieee80211_hw *hw,
     IOLog("rtw88: connect_hw_setup: RF calibration done\n");
 
     /*
-     * 5GHz data-path test: pin data frames to a fixed, robust OFDM rate.
+     * Let the firmware rate-adaptation pick the data rate on both bands.
      *
-     * Management frames (auth/assoc) use a fixed 6M OFDM rate and succeed on
-     * 5GHz, but data frames use the firmware's rate adaptation / highest HT
-     * MCS.  With the watchdog (and the driver's rate-adaptation feedback) off,
-     * that path appears to leave 5GHz data on a rate the AP won't ACK — the
-     * association is real but DHCP never completes (slow wp/rp from retries).
-     * Force data onto the same proven-good fixed rate the mgmt frames use; if
-     * 5GHz throughput then works, rate selection was the culprit and we can
-     * tune the value up.  2.4GHz keeps normal (adaptive) rate selection.
+     * The old 5GHz "pin to 6M OFDM" crutch capped 5GHz at ~5 Mbps. It existed
+     * only because the association was legacy-only, so the RA mask held nothing
+     * but legacy rates and the firmware sometimes settled on a rate the AP
+     * wouldn't ACK. Now that we advertise HT/VHT and mirror those caps onto the
+     * STA (rtw_update_sta_info builds an HT/VHT RA mask), the firmware adapts
+     * across the full MCS set — pinning would only hurt. fix_rate = 0xFF
+     * (U8_MAX) leaves use_rate false so the firmware RA drives the rate.
      */
-    if (hw->conf.chandef.chan &&
-        hw->conf.chandef.chan->band == NL80211_BAND_5GHZ) {
-        rtwdev->dm_info.fix_rate = DESC_RATE6M;   /* 6 Mbps OFDM, use_rate */
-        IOLog("rtw88: connect_hw_setup: 5GHz — pinning data TX to 6M OFDM\n");
-    } else {
-        rtwdev->dm_info.fix_rate = 0xFF;          /* U8_MAX = adaptive */
-    }
+    rtwdev->dm_info.fix_rate = 0xFF;
 
     mutex_unlock(&rtwdev->mutex);
 }
@@ -1221,12 +1214,8 @@ void rtw88_restore_connected_hw(struct ieee80211_hw *hw,
     rtwdev->need_rfk = true;
     rtw_chip_prepare_tx(rtwdev);
 
-    if (hw->conf.chandef.chan &&
-        hw->conf.chandef.chan->band == NL80211_BAND_5GHZ) {
-        rtwdev->dm_info.fix_rate = DESC_RATE6M;
-    } else {
-        rtwdev->dm_info.fix_rate = 0xFF;
-    }
+    /* Firmware rate-adaptation on both bands (see rtw88_connect_hw_setup). */
+    rtwdev->dm_info.fix_rate = 0xFF;
 
     mutex_unlock(&rtwdev->mutex);
 }

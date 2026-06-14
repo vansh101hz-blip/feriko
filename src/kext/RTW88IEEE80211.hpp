@@ -127,6 +127,13 @@ private:
     void      sendEAPOLKey(int step, const uint8_t *replay_counter,
                             bool install, bool ack, bool mic);
 
+    /* A-MPDU BlockAck (aggregation) negotiation */
+    void      startTxAggregation();
+    void      sendAddbaRequest(uint8_t tid);
+    void      sendAddbaResponse(uint8_t tid, uint8_t dialog,
+                                uint16_t req_param, uint16_t ba_timeout);
+    void      handleBackAction(const uint8_t *b, uint32_t len);
+
     /* Frame transmission helpers */
     bool      txMgmtFrame(const uint8_t *frame, uint32_t len);
     bool      txNullFunc(bool powerSave);
@@ -203,7 +210,15 @@ private:
 
     /* Sequence number for TX frames */
     uint16_t _txSeq    = 0;
+    /* Separate SN space for QoS data (TID 0) so the BlockAck window is gap-free */
+    uint16_t _dataSeq  = 0;
     uint16_t _assocAID = 0;
+
+    /* A-MPDU aggregation (BlockAck) state */
+    bool     _txBaActive = false;  /* uplink TX BlockAck agreement established */
+    uint8_t  _baTid      = 0;      /* TID carrying aggregated data (BE)        */
+    uint8_t  _baDialog   = 0;      /* rolling ADDBA-request dialog token       */
+    uint16_t _baBufSize  = 64;     /* advertised BlockAck buffer/window size   */
 
     /* RSSI tracking */
     int      _rssi     = -100;

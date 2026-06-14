@@ -47,6 +47,10 @@
 #define IEEE80211_STYPE_DEAUTH      0x00C0
 #define IEEE80211_STYPE_ACTION      0x00D0
 #define IEEE80211_STYPE_DISASSOC    0x00A0
+/* Data subtype: QoS Data (carries a 2-byte QoS Control field; required for
+ * A-MPDU / BlockAck, which are strictly per-TID). Combined with FTYPE_DATA. */
+#define IEEE80211_STYPE_QOS_DATA    0x0080
+#define IEEE80211_QOS_CTL_TID_MASK  0x000f
 
 struct ieee80211_hdr {
     __le16 frame_control;

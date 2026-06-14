@@ -135,6 +135,13 @@ typedef atomic_t refcount_t;
 #define WLAN_EID_EXT_SUPP_RATES      50
 #define WLAN_EID_VENDOR_SPECIFIC     221
 
+/* Action-frame categories / BlockAck actions (802.11 BlockAck, category 3).
+ * Used by the MLME to negotiate A-MPDU aggregation over the air. */
+#define WLAN_CATEGORY_BACK           3
+#define WLAN_ACTION_ADDBA_REQ        0
+#define WLAN_ACTION_ADDBA_RESP       1
+#define WLAN_ACTION_DELBA            2
+
 /* ------------------------------------------------------------------ */
 /*  Compat global state init/exit                                       */
 /* ------------------------------------------------------------------ */

@@ -639,6 +639,8 @@ void RTW88IEEE80211::releaseSta()
     IOFree(_sta, _staAllocSize ? _staAllocSize : sizeof(struct ieee80211_sta));
     _sta = nullptr;
     _staAllocSize = 0;
+    _txBaActive = false;
+    _dataSeq = 0;
 }
 
 static const char *rtw88CipherName(uint32_t cipher)
@@ -1008,10 +1010,26 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
                 break;
             }
             clearKeys();
+            _txBaActive = false;
             _state = RTW88_STATE_IDLE;
             _scanReturnState = RTW88_STATE_IDLE;
             if (_parent)
                 _parent->setLinkStatus(kIONetworkLinkValid);
+        }
+        kfree_skb(skb);
+        break;
+
+    case 0x00D0: /* action */
+        if (_state == RTW88_STATE_CONNECTED) {
+            struct ieee80211_hdr_3addr *h3 =
+                (struct ieee80211_hdr_3addr *)skb->data;
+            const uint8_t *b = skb->data + sizeof(*h3);
+            uint32_t blen = (skb->len > sizeof(*h3)) ?
+                            skb->len - (uint32_t)sizeof(*h3) : 0;
+            /* BlockAck (ADDBA/DELBA) action frames from our AP only. */
+            if (blen >= 2 && b[0] == WLAN_CATEGORY_BACK &&
+                memcmp(h3->addr3, _targetBSS.bssid, 6) == 0)
+                handleBackAction(b, blen);
         }
         kfree_skb(skb);
         break;
@@ -1789,13 +1807,31 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
             _sta->wme  = true;
 
             /* Populate supported rates so rtw_update_sta_info() builds a
-             * non-empty rate-adaptation mask.  Keep HT/VHT disabled here:
-             * buildAssocReq() currently sends a legacy association request,
-             * so advertising HT MCS to the firmware would make it transmit
-             * data rates the AP has not accepted for this association. */
+             * non-empty rate-adaptation mask. */
             _sta->deflink.supp_rates[NL80211_BAND_2GHZ] = 0xFFF; /* CCK+OFDM */
             _sta->deflink.supp_rates[NL80211_BAND_5GHZ] = 0xFF;  /* OFDM     */
             _sta->deflink.bandwidth = IEEE80211_STA_RX_BW_20;
+
+            /* Mirror the chip's HT/VHT capabilities onto the peer STA so
+             * rtw_update_sta_info() (invoked by sta_add) builds a firmware
+             * rate-adaptation mask that includes HT/VHT MCS rates instead of
+             * legacy-only.  This MUST match what buildAssocReq() advertised to
+             * the AP.  Operation is held to 20 MHz (clear the 40 MHz HT bits)
+             * to match the 20 MHz PHY. */
+            enum nl80211_band sta_band =
+                (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ
+                                          : NL80211_BAND_2GHZ;
+            struct ieee80211_supported_band *sband =
+                (_hw->wiphy) ? _hw->wiphy->bands[sta_band] : nullptr;
+            if (sband) {
+                _sta->deflink.ht_cap = sband->ht_cap;
+                _sta->deflink.ht_cap.cap &=
+                    ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+                                IEEE80211_HT_CAP_SGI_40 |
+                                IEEE80211_HT_CAP_DSSSCCK40);
+                if (sta_band == NL80211_BAND_5GHZ)
+                    _sta->deflink.vht_cap = sband->vht_cap;
+            }
 
             _hw->ops->sta_add(_hw, _vif, _sta);
         }
@@ -1828,6 +1864,7 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
         _state = RTW88_STATE_CONNECTED;
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
+        startTxAggregation();   /* negotiate uplink A-MPDU now the link is up */
         _timer->cancelTimeout();
     }
 }
@@ -1904,6 +1941,73 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
         body[1] = sizeof(ext_rates_2g);
         memcpy(body + 2, ext_rates_2g, sizeof(ext_rates_2g));
         body += 2 + sizeof(ext_rates_2g);
+    }
+
+    /*
+     * HT/VHT Capabilities — advertise 802.11n/ac so the AP associates us as a
+     * high-throughput station (high MCS rates) and is willing to set up A-MPDU
+     * BlockAck aggregation.  Without these IEs the AP treats us as legacy a/g
+     * (<=54 Mbps, no aggregation), which is the root cause of the ~13 Mbps cap.
+     *
+     * We copy directly from the chip's own band capabilities (filled by
+     * rtw_init_ht_cap/rtw_init_vht_cap during rtw_register_hw) so we never
+     * claim more than the hardware supports.  The 40/80 MHz channel-width bits
+     * are cleared because the PHY stays on a 20 MHz channel this pass — wider
+     * operation needs HT/VHT Operation parsing + a re-tune (future work).
+     */
+    enum nl80211_band band =
+        (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ : NL80211_BAND_2GHZ;
+    struct ieee80211_supported_band *sband =
+        (_hw && _hw->wiphy) ? _hw->wiphy->bands[band] : nullptr;
+
+    if (sband && sband->ht_cap.ht_supported) {
+        const struct ieee80211_sta_ht_cap *ht = &sband->ht_cap;
+        body[0] = WLAN_EID_HT_CAPABILITY;
+        body[1] = 26;
+        uint8_t *p = body + 2;
+        /* HT Capabilities Info (2 bytes, LE) — pin to 20 MHz operation. */
+        uint16_t htcap = (uint16_t)(ht->cap & ~(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+                                                IEEE80211_HT_CAP_SGI_40 |
+                                                IEEE80211_HT_CAP_DSSSCCK40));
+        p[0] = (uint8_t)(htcap & 0xff);
+        p[1] = (uint8_t)(htcap >> 8);
+        /* A-MPDU Parameters: max-length exponent (bits 1:0) | density (4:2). */
+        p[2] = (uint8_t)((ht->ampdu_factor & 0x3) |
+                         ((ht->ampdu_density & 0x7) << 2));
+        /* Supported MCS Set (16 bytes): rx_mask[10], rx_highest(2),
+         * tx_params(1), 3 reserved. */
+        memcpy(p + 3, ht->mcs.rx_mask, 10);
+        p[13] = (uint8_t)(ht->mcs.rx_highest & 0xff);
+        p[14] = (uint8_t)((ht->mcs.rx_highest >> 8) & 0xff);
+        p[15] = (uint8_t)(ht->mcs.tx_params & 0xff);
+        /* p[16..25]: MCS-set reserved (3) + HT-ext (2) + TxBF (4) + ASEL (1). */
+        memset(p + 16, 0, 10);
+        body += 2 + 26;
+    }
+
+    if (band == NL80211_BAND_5GHZ && sband && sband->vht_cap.vht_supported) {
+        const struct ieee80211_sta_vht_cap *vht = &sband->vht_cap;
+        body[0] = WLAN_EID_VHT_CAPABILITY;
+        body[1] = 12;
+        uint8_t *p = body + 2;
+        /* VHT Capabilities Info (4 bytes, LE).  The Supported Channel Width
+         * Set subfield (bits 2:3) stays 0 (<=80 MHz capable); actual operation
+         * is held to 20 MHz by the HT cap above. */
+        uint32_t vcap = vht->cap;
+        p[0] = (uint8_t)(vcap & 0xff);
+        p[1] = (uint8_t)((vcap >> 8) & 0xff);
+        p[2] = (uint8_t)((vcap >> 16) & 0xff);
+        p[3] = (uint8_t)((vcap >> 24) & 0xff);
+        /* Supported VHT-MCS and NSS Set (8 bytes). */
+        uint16_t rxmap = (uint16_t)le32_to_cpu(vht->vht_mcs.rx_mcs_map);
+        uint16_t rxhi  = le16_to_cpu(vht->vht_mcs.rx_highest);
+        uint16_t txmap = (uint16_t)le32_to_cpu(vht->vht_mcs.tx_mcs_map);
+        uint16_t txhi  = le16_to_cpu(vht->vht_mcs.tx_highest);
+        p[4] = (uint8_t)(rxmap & 0xff); p[5] = (uint8_t)(rxmap >> 8);
+        p[6] = (uint8_t)(rxhi & 0xff);  p[7] = (uint8_t)(rxhi >> 8);
+        p[8] = (uint8_t)(txmap & 0xff); p[9] = (uint8_t)(txmap >> 8);
+        p[10] = (uint8_t)(txhi & 0xff); p[11] = (uint8_t)(txhi >> 8);
+        body += 2 + 12;
     }
 
     /* WME information element. We later notify rtw88 that QoS is enabled, so
@@ -2085,6 +2189,7 @@ void RTW88IEEE80211::handleEAPOL(const uint8_t *data, uint32_t len)
         _timer->cancelTimeout();
         if (_parent)
             _parent->setLinkStatus(kIONetworkLinkActive | kIONetworkLinkValid);
+        startTxAggregation();   /* keys are installed — negotiate uplink A-MPDU */
         IOLog("rtw88: WPA2 connected! gtk_len=%u gtk_idx=%u\n", gtk_len, gtk_idx);
     }
 }
@@ -2167,6 +2272,139 @@ bool RTW88IEEE80211::txMgmtFrame(const uint8_t *frame, uint32_t len)
     struct ieee80211_tx_control ctrl = { .sta = nullptr };
     _hw->ops->tx(_hw, &ctrl, skb);
     return true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  A-MPDU BlockAck negotiation                                          */
+/*                                                                      */
+/*  802.11n/ac throughput depends on A-MPDU aggregation, which requires */
+/*  a per-TID BlockAck agreement negotiated over the air with ADDBA     */
+/*  action frames (category 3 = BACK).  mac80211 normally does this; we  */
+/*  bypass mac80211, so the MLME drives it here:                         */
+/*    - TX (uplink) agg: we send an ADDBA Request and, on a successful   */
+/*      ADDBA Response, tag our data frames with IEEE80211_TX_CTL_AMPDU. */
+/*    - RX (downlink) agg: we answer the AP's ADDBA Request; Realtek HW  */
+/*      then auto-generates the RX BlockAck and de-aggregates for us     */
+/*      (rtw88's ampdu_action is a no-op for RX_START/STOP).             */
+/* ------------------------------------------------------------------ */
+
+void RTW88IEEE80211::sendAddbaRequest(uint8_t tid)
+{
+    uint8_t f[24 + 9] = {};
+    struct ieee80211_hdr_3addr *h = (struct ieee80211_hdr_3addr *)f;
+    h->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ACTION);
+    h->duration_id   = 0;
+    memcpy(h->addr1, _targetBSS.bssid, 6);
+    memcpy(h->addr2, _macAddr, 6);
+    memcpy(h->addr3, _targetBSS.bssid, 6);
+    h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+
+    if (++_baDialog == 0) _baDialog = 1;   /* dialog token must be non-zero */
+
+    uint8_t *b = f + 24;
+    b[0] = WLAN_CATEGORY_BACK;
+    b[1] = WLAN_ACTION_ADDBA_REQ;
+    b[2] = _baDialog;
+    /* Block Ack Parameter Set: A-MSDU(bit0)=0, policy(bit1)=1 (immediate),
+     * TID(bits 2-5), Buffer Size(bits 6-15). */
+    uint16_t param = (uint16_t)((1u << 1) |
+                                ((unsigned)(tid & 0xf) << 2) |
+                                ((unsigned)(_baBufSize & 0x3ff) << 6));
+    b[3] = (uint8_t)(param & 0xff);
+    b[4] = (uint8_t)(param >> 8);
+    b[5] = 0; b[6] = 0;   /* Block Ack Timeout = 0 (no timeout) */
+    /* Block Ack Starting Sequence Control: SSN (bits 4-15) = next data SN, so
+     * the AP's reorder window aligns with the TID-0 data stream. */
+    uint16_t ssc = (uint16_t)((uint16_t)(_dataSeq & 0xFFF) << 4);
+    b[7] = (uint8_t)(ssc & 0xff);
+    b[8] = (uint8_t)(ssc >> 8);
+
+    txMgmtFrame(f, sizeof(f));
+}
+
+void RTW88IEEE80211::sendAddbaResponse(uint8_t tid, uint8_t dialog,
+                                       uint16_t req_param, uint16_t ba_timeout)
+{
+    uint8_t f[24 + 9] = {};
+    struct ieee80211_hdr_3addr *h = (struct ieee80211_hdr_3addr *)f;
+    h->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ACTION);
+    h->duration_id   = 0;
+    memcpy(h->addr1, _targetBSS.bssid, 6);
+    memcpy(h->addr2, _macAddr, 6);
+    memcpy(h->addr3, _targetBSS.bssid, 6);
+    h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+
+    uint8_t *b = f + 24;
+    b[0] = WLAN_CATEGORY_BACK;
+    b[1] = WLAN_ACTION_ADDBA_RESP;
+    b[2] = dialog;
+    b[3] = 0; b[4] = 0;   /* Status Code = 0 (success) */
+    /* Echo the requester's A-MSDU bit; force immediate policy and our TID. */
+    uint16_t param = (uint16_t)((unsigned)(req_param & 0x0001u) |
+                                (1u << 1) |
+                                ((unsigned)(tid & 0xf) << 2) |
+                                ((unsigned)(_baBufSize & 0x3ff) << 6));
+    b[5] = (uint8_t)(param & 0xff);
+    b[6] = (uint8_t)(param >> 8);
+    b[7] = (uint8_t)(ba_timeout & 0xff);
+    b[8] = (uint8_t)(ba_timeout >> 8);
+
+    txMgmtFrame(f, sizeof(f));
+}
+
+void RTW88IEEE80211::startTxAggregation()
+{
+    if (_txBaActive) return;
+    if (!_sta || !_sta->deflink.ht_cap.ht_supported) return;
+    IOLog("rtw88: starting TX A-MPDU — sending ADDBA request (tid=%u)\n", _baTid);
+    sendAddbaRequest(_baTid);
+}
+
+void RTW88IEEE80211::handleBackAction(const uint8_t *b, uint32_t len)
+{
+    if (len < 2) return;
+    switch (b[1]) {   /* BlockAck action field */
+    case WLAN_ACTION_ADDBA_REQ: {
+        /* AP wants to aggregate downlink traffic to us — accept it. */
+        if (len < 9) return;
+        uint8_t  dialog    = b[2];
+        uint16_t req_param = (uint16_t)(b[3] | (b[4] << 8));
+        uint16_t ba_to     = (uint16_t)(b[5] | (b[6] << 8));
+        uint8_t  tid       = (uint8_t)((req_param >> 2) & 0xf);
+        sendAddbaResponse(tid, dialog, req_param, ba_to);
+        IOLog("rtw88: RX ADDBA request (tid=%u) — accepted, downlink A-MPDU on\n",
+              tid);
+        break;
+    }
+    case WLAN_ACTION_ADDBA_RESP: {
+        /* Response to our TX ADDBA request. */
+        if (len < 9) return;
+        uint16_t status = (uint16_t)(b[3] | (b[4] << 8));
+        uint16_t param  = (uint16_t)(b[5] | (b[6] << 8));
+        uint8_t  tid    = (uint8_t)((param >> 2) & 0xf);
+        if (status == 0 && tid == _baTid) {
+            _txBaActive = true;
+            IOLog("rtw88: TX ADDBA accepted (tid=%u) — uplink A-MPDU on\n", tid);
+        } else {
+            IOLog("rtw88: TX ADDBA rejected status=%u tid=%u\n", status, tid);
+        }
+        break;
+    }
+    case WLAN_ACTION_DELBA: {
+        if (len < 6) return;
+        uint16_t del_param = (uint16_t)(b[2] | (b[3] << 8));
+        uint8_t  tid       = (uint8_t)((del_param >> 12) & 0xf);
+        bool     initiator = (del_param & (1u << 11)) != 0;
+        /* initiator=0 means the AP is the recipient of the agreement it is
+         * tearing down — that is our uplink TX BA, so stop aggregating. */
+        if (!initiator && tid == _baTid)
+            _txBaActive = false;
+        IOLog("rtw88: RX DELBA tid=%u initiator=%d\n", tid, initiator);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 bool RTW88IEEE80211::txNullFunc(bool powerSave)
@@ -2267,15 +2505,19 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     uint16_t ethertype = (uint16_t)((eh[12] << 8) | eh[13]);
     bool protected_frame = _wpa2 && _ptkConf && ethertype != ETH_P_PAE;
 
-    uint32_t framelen = 24 + (protected_frame ? 8 : 0) + 8 + paylen;
+    /* QoS Data frame: 24-byte base header + 2-byte QoS Control. A-MPDU and
+     * BlockAck are strictly per-TID, so aggregation requires QoS Data (a plain
+     * Data frame carries no TID and can never be aggregated). */
+    uint32_t framelen = 26 + (protected_frame ? 8 : 0) + 8 + paylen;
     struct sk_buff *skb = alloc_skb(framelen + 128, GFP_ATOMIC);
     if (!skb) { mbuf_freem(m); return false; }
     skb_reserve(skb, 128);  /* TX descriptor headroom */
 
-    /* 802.11 data header (ToDS: station -> AP) */
+    /* 802.11 QoS Data header (ToDS: station -> AP) */
     struct ieee80211_hdr_3addr *h =
         (struct ieee80211_hdr_3addr *)skb_put(skb, 24);
-    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS;
+    uint16_t fc = IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_DATA |
+                  IEEE80211_FCTL_TODS;
     if (protected_frame)
         fc |= IEEE80211_FCTL_PROTECTED;
     h->frame_control = cpu_to_le16(fc);
@@ -2283,10 +2525,16 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     memcpy(h->addr1, _targetBSS.bssid, 6); /* RA = BSSID (the AP)        */
     memcpy(h->addr2, _macAddr, 6);         /* TA = SA  (us)              */
     memcpy(h->addr3, eh, 6);               /* DA = Ethernet destination  */
-    /* Assign a sequence number; each data frame must have a unique seq to
-     * avoid the AP's duplicate-detection filter discarding subsequent frames.
-     * mac80211 would do this in the real stack; we must do it ourselves. */
-    h->seq_ctrl = cpu_to_le16((uint16_t)(_txSeq++ & 0xFFF) << 4);
+    /* Sequence number from the per-TID data space (kept separate from the
+     * mgmt counter so the TID-0 BlockAck window stays gap-free).  rtw88 uses
+     * this header SN for data frames (no hw-assigned SN on the data path). */
+    h->seq_ctrl = cpu_to_le16((uint16_t)(_dataSeq++ & 0xFFF) << 4);
+
+    /* QoS Control (2 bytes, LE): TID in bits 0-3 (BE = 0), Normal-Ack policy,
+     * no A-MSDU.  Value 0 for TID 0 / normal ack. */
+    uint8_t *qos = skb_put(skb, 2);
+    qos[0] = (uint8_t)(_baTid & IEEE80211_QOS_CTL_TID_MASK);
+    qos[1] = 0;
 
     if (protected_frame) {
         for (int i = 0; i < 6; i++) {
@@ -2333,6 +2581,12 @@ bool RTW88IEEE80211::txDataFrame(mbuf_t m)
     struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
     memset(info, 0, sizeof(*info));
     info->flags = IEEE80211_TX_CTL_FIRST_FRAGMENT;
+    /* Once the uplink BlockAck agreement is up, mark BE-TID frames for
+     * aggregation: rtw88 then sets the descriptor's AGG_EN bit and the hardware
+     * builds A-MPDUs. (rtw_tx reads this flag directly; the txq/RTW_TXQ_AMPDU
+     * path is unused by this port.) */
+    if (_txBaActive)
+        info->flags |= IEEE80211_TX_CTL_AMPDU;
     info->band  = (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ
                                             : NL80211_BAND_2GHZ;
     info->control.vif = _vif;
