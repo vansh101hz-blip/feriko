@@ -577,6 +577,19 @@ bool RTW88IEEE80211::init(RTW88PCIDevice *dev, struct pci_dev *pci)
     if (!_timer) return false;
     _wl->addEventSource(_timer);
 
+    /* RX A-MPDU reorder: lock + hole-flush timer.  The timer lives on the
+     * RX/interrupt workloop (not _wl) so reorder-released frames and normal RX
+     * frames are delivered from the same thread — injectRxFrame's queue+flush
+     * is not safe against concurrent callers. */
+    _rxBaLock = IOLockAlloc();
+    if (!_rxBaLock) return false;
+    IOWorkLoop *rxwl = _parent ? _parent->getRxWorkLoop() : nullptr;
+    if (!rxwl) return false;
+    _reorderTimer = IOTimerEventSource::timerEventSource(this,
+        &RTW88IEEE80211::reorderTimerFired);
+    if (!_reorderTimer) return false;
+    rxwl->addEventSource(_reorderTimer);
+
     IOLog("rtw88: RTW88IEEE80211 initialized\n");
     return true;
 }
@@ -585,6 +598,14 @@ void RTW88IEEE80211::free()
 {
     clearKeys();
     releaseSta();
+    rxBaTeardownAll();
+    if (_reorderTimer) {
+        IOWorkLoop *rxwl = _parent ? _parent->getRxWorkLoop() : nullptr;
+        if (rxwl) rxwl->removeEventSource(_reorderTimer);
+        _reorderTimer->release();
+        _reorderTimer = nullptr;
+    }
+    if (_rxBaLock) { IOLockFree(_rxBaLock); _rxBaLock = nullptr; }
     _manualScanAbort = true;
     if (_manualScanTC) { thread_call_cancel(_manualScanTC); thread_call_free(_manualScanTC); _manualScanTC = nullptr; }
     if (_connectTC) { thread_call_cancel(_connectTC); thread_call_free(_connectTC); _connectTC = nullptr; }
@@ -641,6 +662,7 @@ void RTW88IEEE80211::releaseSta()
     _staAllocSize = 0;
     _txBaActive = false;
     _dataSeq = 0;
+    rxBaTeardownAll();
 }
 
 static const char *rtw88CipherName(uint32_t cipher)
@@ -1011,6 +1033,7 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
             }
             clearKeys();
             _txBaActive = false;
+            rxBaTeardownAll();
             _state = RTW88_STATE_IDLE;
             _scanReturnState = RTW88_STATE_IDLE;
             if (_parent)
@@ -1235,12 +1258,55 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
         return;
     }
 
-    /* Strip 802.11 header, add Ethernet header */
+    /* If this TID has an active downlink BlockAck agreement, run the frame
+     * through the per-TID reorder buffer so A-MPDU subframes (and frames
+     * retransmitted in a later A-MPDU) reach the stack in order.  Delivering
+     * out of order collapses TCP and trips CCMP replay drops — that is the RX
+     * regression aggregation otherwise causes. */
+    struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+    if (ieee80211_is_data_qos(hdr->frame_control)) {
+        uint16_t hdrlen = ieee80211_get_hdrlen_from_skb(skb);
+        if (skb->len >= hdrlen) {
+            uint8_t tid = (uint8_t)(skb->data[hdrlen - 2] & 0x0f);
+            if (tid < kRxBaNumTid && _rxBa[tid] && _rxBa[tid]->active) {
+                uint16_t sn = (uint16_t)
+                    ((le16_to_cpu(hdr->seq_ctrl) & 0xFFF0) >> 4);
+                rxReorderInput(tid, skb, sn);   /* takes ownership of skb */
+                return;
+            }
+        }
+    }
+
+    deliverDataFrame(skb);   /* no active RX BA — deliver immediately */
+}
+
+/* Strip the 802.11 header (+ optional CCMP IV), de-aggregate A-MSDU if present,
+ * and hand each MSDU to the network stack as Ethernet.  Takes ownership of skb. */
+void RTW88IEEE80211::deliverDataFrame(struct sk_buff *skb)
+{
     struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
     uint16_t hdrlen = ieee80211_get_hdrlen_from_skb(skb);
+    if (skb->len < hdrlen) { kfree_skb(skb); return; }
 
-    /* Check for LLC/SNAP. Decrypted CCMP frames may still include the
-     * 8-byte CCMP header before the plaintext LLC/SNAP bytes. */
+    bool amsdu = false;
+    if (ieee80211_is_data_qos(hdr->frame_control))
+        amsdu = (skb->data[hdrlen - 2] & 0x80) != 0;  /* QoS-ctl A-MSDU bit */
+
+    if (amsdu) {
+        /* QoS A-MSDU: header [+ CCMP IV] then a chain of subframes.  rtw88
+         * leaves the CCMP IV in the frame (mac80211 would normally strip it). */
+        uint32_t off = hdrlen;
+        if (ieee80211_has_protected(hdr->frame_control)) {
+            if (skb->len < off + 8) { kfree_skb(skb); return; }
+            off += 8;
+        }
+        deAmsdu(skb->data + off, skb->len - off);
+        kfree_skb(skb);
+        return;
+    }
+
+    /* Single MSDU.  Decrypted CCMP frames may still carry the 8-byte CCMP
+     * header before the plaintext LLC/SNAP bytes. */
     uint32_t payload_off = hdrlen;
     if (skb->len < payload_off + 8) { kfree_skb(skb); return; }
     const uint8_t *llc = skb->data + payload_off;
@@ -1262,7 +1328,7 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
     uint16_t ethertype = 0;
     if (llc[0] == 0xAA && llc[1] == 0xAA && llc[2] == 0x03) {
         ethertype = (uint16_t)((llc[6] << 8) | llc[7]);
-        /* Check for EAPOL during handshake */
+        /* Check for EAPOL during handshake (never aggregated). */
         if (ethertype == ETH_P_PAE && _state == RTW88_STATE_HANDSHAKING) {
             handleEAPOL(llc + 8, skb->len - payload_off - 8);
             kfree_skb(skb);
@@ -1270,36 +1336,231 @@ void RTW88IEEE80211::processRxData(struct sk_buff *skb)
         }
     }
 
-    /* Build Ethernet frame: [dst(6)][src(6)][ethertype(2)][payload] */
+    /* DA = addr1 (recipient = us), SA = addr3 (original source via DS) */
     uint32_t paylen = skb->len - payload_off - 8; /* strip 802.11/CCMP/LLC */
-    uint32_t ethlen = 14 + paylen;
+    deliverEthernet(hdr->addr1, hdr->addr3, ethertype, llc + 8, paylen);
+    kfree_skb(skb);
+}
 
-    /* Allocate the input mbuf via IONetworkController::allocatePacket (through
-     * the parent) — NOT mbuf_allocpacket.  allocatePacket sets m_len and
-     * pkthdr.len consistently for every segment, which is what the dlil input
-     * validator requires; mbuf_allocpacket left m_len inconsistent and the
-     * kernel paniced with "Failed mbuf validity check: len -14".
-     * mbuf_copyback fills the data and is chain-safe (no heap overflow). */
-    if (!_parent) { kfree_skb(skb); return; }
-    mbuf_t m = _parent->allocateInputPacket(ethlen);
-    if (!m) { kfree_skb(skb); return; }
+/* Build one Ethernet frame [da][sa][ethertype][payload] and inject it. */
+void RTW88IEEE80211::deliverEthernet(const uint8_t *da, const uint8_t *sa,
+                                     uint16_t ethertype,
+                                     const uint8_t *payload, uint32_t paylen)
+{
+    /* Allocate via IONetworkController::allocatePacket (through the parent) —
+     * NOT mbuf_allocpacket.  allocatePacket sets m_len/pkthdr.len consistently
+     * for every segment, which the dlil input validator requires.
+     * mbuf_copyback fills the data and is chain-safe. */
+    if (!_parent) return;
+    mbuf_t m = _parent->allocateInputPacket(14 + paylen);
+    if (!m) return;
 
     uint8_t ehdr[14];
-    /* DA = addr1 (recipient), SA = addr3 (original source via DS) */
-    memcpy(ehdr,     hdr->addr1, 6);  /* DA */
-    memcpy(ehdr + 6, hdr->addr3, 6);  /* SA */
+    memcpy(ehdr,     da, 6);
+    memcpy(ehdr + 6, sa, 6);
     ehdr[12] = (uint8_t)(ethertype >> 8);
     ehdr[13] = (uint8_t)(ethertype & 0xff);
 
-    if (mbuf_copyback(m, 0,  14,     ehdr,    MBUF_WAITOK) != 0 ||
-        mbuf_copyback(m, 14, paylen, llc + 8, MBUF_WAITOK) != 0) {
+    if (mbuf_copyback(m, 0, 14, ehdr, MBUF_WAITOK) != 0 ||
+        (paylen && mbuf_copyback(m, 14, paylen, payload, MBUF_WAITOK) != 0)) {
         mbuf_freem(m);
+        return;
+    }
+    _parent->injectRxFrame(m);
+}
+
+/* Split an A-MSDU payload into its constituent MSDUs and deliver each. */
+void RTW88IEEE80211::deAmsdu(const uint8_t *data, uint32_t len)
+{
+    uint32_t pos = 0;
+    /* Subframe: DA(6) SA(6) Length(2, big-endian) | MSDU(Length) | pad to a
+     * 4-byte boundary (the last subframe is not padded). */
+    while (pos + 14 <= len) {
+        const uint8_t *sf = data + pos;
+        uint16_t sublen = (uint16_t)((sf[12] << 8) | sf[13]);
+        if (sublen < 8 || pos + 14 + sublen > len)
+            break;   /* truncated / malformed */
+        const uint8_t *msdu = sf + 14;
+        if (msdu[0] == 0xAA && msdu[1] == 0xAA && msdu[2] == 0x03) {
+            uint16_t ethertype = (uint16_t)((msdu[6] << 8) | msdu[7]);
+            deliverEthernet(sf, sf + 6, ethertype, msdu + 8, sublen - 8);
+        }
+        pos += (14u + sublen + 3u) & ~3u;   /* next subframe (4-byte aligned) */
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  RX A-MPDU reorder buffer                                            */
+/* ------------------------------------------------------------------ */
+
+void RTW88IEEE80211::rxBaSetup(uint8_t tid, uint16_t ssn, uint16_t bufsize)
+{
+    if (tid >= kRxBaNumTid) return;
+    if (bufsize == 0 || bufsize > kRxBaMaxBuf) bufsize = kRxBaMaxBuf;
+
+    IOLockLock(_rxBaLock);
+    RxReorder *r = _rxBa[tid];
+    if (!r) {
+        r = (RxReorder *)IOMallocZero(sizeof(RxReorder));
+        _rxBa[tid] = r;
+    } else {
+        for (uint32_t i = 0; i < kRxBaMaxBuf; i++)
+            if (r->buf[i]) { kfree_skb(r->buf[i]); r->buf[i] = nullptr; }
+    }
+    if (r) {
+        r->active  = true;
+        r->headSn  = (uint16_t)(ssn & 0xFFF);
+        r->bufSize = bufsize;
+        r->stored  = 0;
+    }
+    IOLockUnlock(_rxBaLock);
+}
+
+void RTW88IEEE80211::rxBaTeardown(uint8_t tid)
+{
+    if (tid >= kRxBaNumTid) return;
+    struct sk_buff *freelist[kRxBaMaxBuf];
+    uint32_t nf = 0;
+
+    IOLockLock(_rxBaLock);
+    RxReorder *r = _rxBa[tid];
+    if (r) {
+        for (uint32_t i = 0; i < kRxBaMaxBuf; i++)
+            if (r->buf[i]) { freelist[nf++] = r->buf[i]; r->buf[i] = nullptr; }
+        _rxBa[tid] = nullptr;
+    }
+    IOLockUnlock(_rxBaLock);
+
+    if (r) {
+        IOFree(r, sizeof(RxReorder));
+        for (uint32_t i = 0; i < nf; i++)
+            kfree_skb(freelist[i]);
+    }
+}
+
+void RTW88IEEE80211::rxBaTeardownAll()
+{
+    for (uint8_t tid = 0; tid < kRxBaNumTid; tid++)
+        rxBaTeardown(tid);
+    /* Deliberately do NOT cancel _reorderTimer here: teardown can run on a
+     * different workloop than the timer, and a stray fire is harmless (it finds
+     * every TID inactive/empty and does nothing). */
+}
+
+void RTW88IEEE80211::rxReorderInput(uint8_t tid, struct sk_buff *skb, uint16_t sn)
+{
+    struct sk_buff *out[kRxBaMaxBuf];
+    uint32_t nout = 0;
+    bool needTimer = false;
+
+    IOLockLock(_rxBaLock);
+    RxReorder *r = _rxBa[tid];
+    if (!r || !r->active) {            /* torn down between dispatch and here */
+        IOLockUnlock(_rxBaLock);
+        deliverDataFrame(skb);
+        return;
+    }
+
+    uint16_t rel = (uint16_t)((sn - r->headSn) & 0xFFF);
+    if (rel >= 2048) {                 /* before the window: stale / duplicate */
+        IOLockUnlock(_rxBaLock);
         kfree_skb(skb);
         return;
     }
 
-    kfree_skb(skb);
-    _parent->injectRxFrame(m);
+    if (rel >= r->bufSize) {
+        /* sn is ahead of the window — slide the window up, releasing buffered
+         * frames that fall out the bottom (in order; missing ones are lost). */
+        uint16_t newHead = (uint16_t)((sn + 1 - r->bufSize) & 0xFFF);
+        while (((newHead - r->headSn) & 0xFFF) != 0 &&
+               ((newHead - r->headSn) & 0xFFF) < 2048 && nout < kRxBaMaxBuf) {
+            uint16_t hidx = r->headSn % kRxBaMaxBuf;
+            if (r->buf[hidx]) {
+                out[nout++] = r->buf[hidx];
+                r->buf[hidx] = nullptr;
+                r->stored--;
+            }
+            r->headSn = (uint16_t)((r->headSn + 1) & 0xFFF);
+        }
+    }
+
+    uint16_t idx = sn % kRxBaMaxBuf;
+    if (r->buf[idx]) {                 /* duplicate within the window */
+        kfree_skb(skb);
+    } else {
+        r->buf[idx] = skb;
+        r->stored++;
+    }
+
+    /* Release the in-order run starting at head. */
+    while (r->stored > 0 && nout < kRxBaMaxBuf) {
+        uint16_t hidx = r->headSn % kRxBaMaxBuf;
+        if (!r->buf[hidx]) break;
+        out[nout++] = r->buf[hidx];
+        r->buf[hidx] = nullptr;
+        r->stored--;
+        r->headSn = (uint16_t)((r->headSn + 1) & 0xFFF);
+    }
+    needTimer = (r->stored > 0);
+    IOLockUnlock(_rxBaLock);
+
+    for (uint32_t i = 0; i < nout; i++)
+        deliverDataFrame(out[i]);
+
+    if (needTimer)
+        rxReorderArmTimer();
+}
+
+void RTW88IEEE80211::rxReorderArmTimer()
+{
+    if (_reorderTimer)
+        _reorderTimer->setTimeoutMS(kReorderTimeoutMs);
+}
+
+/* Timer: a hole has persisted past the reorder timeout (the missing frame is
+ * not coming).  Force progress by releasing past the first hole on each TID. */
+void RTW88IEEE80211::rxReorderFlushStale()
+{
+    struct sk_buff *out[kRxBaMaxBuf];
+    uint32_t nout = 0;
+    bool again = false;
+
+    IOLockLock(_rxBaLock);
+    for (uint8_t tid = 0; tid < kRxBaNumTid; tid++) {
+        RxReorder *r = _rxBa[tid];
+        if (!r || !r->active || r->stored == 0) continue;
+
+        /* Skip leading holes (lost frames), then release the next run. */
+        uint32_t guard = 0;
+        while (r->stored > 0 && guard < 4096) {
+            uint16_t hidx = r->headSn % kRxBaMaxBuf;
+            if (r->buf[hidx]) break;
+            r->headSn = (uint16_t)((r->headSn + 1) & 0xFFF);
+            guard++;
+        }
+        while (r->stored > 0 && nout < kRxBaMaxBuf) {
+            uint16_t hidx = r->headSn % kRxBaMaxBuf;
+            if (!r->buf[hidx]) break;
+            out[nout++] = r->buf[hidx];
+            r->buf[hidx] = nullptr;
+            r->stored--;
+            r->headSn = (uint16_t)((r->headSn + 1) & 0xFFF);
+        }
+        if (r->stored > 0) again = true;
+    }
+    IOLockUnlock(_rxBaLock);
+
+    for (uint32_t i = 0; i < nout; i++)
+        deliverDataFrame(out[i]);
+
+    if (again)
+        rxReorderArmTimer();
+}
+
+void RTW88IEEE80211::reorderTimerFired(OSObject *owner, IOTimerEventSource *)
+{
+    RTW88IEEE80211 *self = OSDynamicCast(RTW88IEEE80211, owner);
+    if (self) self->rxReorderFlushStale();
 }
 
 /* ------------------------------------------------------------------ */
@@ -2365,15 +2626,20 @@ void RTW88IEEE80211::handleBackAction(const uint8_t *b, uint32_t len)
     if (len < 2) return;
     switch (b[1]) {   /* BlockAck action field */
     case WLAN_ACTION_ADDBA_REQ: {
-        /* AP wants to aggregate downlink traffic to us — accept it. */
+        /* AP wants to aggregate downlink traffic to us — accept it and stand
+         * up an RX reorder buffer for the TID so we deliver in order. */
         if (len < 9) return;
         uint8_t  dialog    = b[2];
         uint16_t req_param = (uint16_t)(b[3] | (b[4] << 8));
         uint16_t ba_to     = (uint16_t)(b[5] | (b[6] << 8));
+        uint16_t ssc       = (uint16_t)(b[7] | (b[8] << 8));
         uint8_t  tid       = (uint8_t)((req_param >> 2) & 0xf);
+        uint16_t bufsz     = (uint16_t)((req_param >> 6) & 0x3ff);
+        uint16_t ssn       = (uint16_t)(ssc >> 4);
+        rxBaSetup(tid, ssn, bufsz);
         sendAddbaResponse(tid, dialog, req_param, ba_to);
-        IOLog("rtw88: RX ADDBA request (tid=%u) — accepted, downlink A-MPDU on\n",
-              tid);
+        IOLog("rtw88: RX ADDBA request (tid=%u ssn=%u buf=%u) — accepted, "
+              "downlink A-MPDU on\n", tid, ssn, bufsz);
         break;
     }
     case WLAN_ACTION_ADDBA_RESP: {
@@ -2395,10 +2661,13 @@ void RTW88IEEE80211::handleBackAction(const uint8_t *b, uint32_t len)
         uint16_t del_param = (uint16_t)(b[2] | (b[3] << 8));
         uint8_t  tid       = (uint8_t)((del_param >> 12) & 0xf);
         bool     initiator = (del_param & (1u << 11)) != 0;
-        /* initiator=0 means the AP is the recipient of the agreement it is
-         * tearing down — that is our uplink TX BA, so stop aggregating. */
+        /* initiator=0: AP is the recipient of the agreement it is tearing down
+         * — our uplink TX BA, so stop aggregating.  initiator=1: AP is the
+         * originator — its downlink BA, so drop our RX reorder buffer. */
         if (!initiator && tid == _baTid)
             _txBaActive = false;
+        if (initiator)
+            rxBaTeardown(tid);
         IOLog("rtw88: RX DELBA tid=%u initiator=%d\n", tid, initiator);
         break;
     }

@@ -81,6 +81,11 @@ public:
 
     /* Called from RTW88IEEE80211 to deliver RX frames to macOS */
     void injectRxFrame(mbuf_t m);
+    /* The workloop the RX/interrupt path runs on. RTW88IEEE80211 attaches its
+     * RX reorder flush timer here so all frame delivery is serialized on one
+     * thread (injectRxFrame's queue+flush is not safe against concurrent
+     * callers). */
+    IOWorkLoop *getRxWorkLoop() const { return _workLoop; }
     /* Allocate an input mbuf via the IONetworkController allocator (sets
      * m_len and pkthdr.len consistently — required for inputPacket). */
     mbuf_t allocateInputPacket(uint32_t len);

@@ -134,6 +134,20 @@ private:
                                 uint16_t req_param, uint16_t ba_timeout);
     void      handleBackAction(const uint8_t *b, uint32_t len);
 
+    /* RX A-MPDU reorder + delivery */
+    void      deliverDataFrame(struct sk_buff *skb);   /* strip 802.11, inject */
+    void      deAmsdu(const uint8_t *data, uint32_t len);
+    void      deliverEthernet(const uint8_t *da, const uint8_t *sa,
+                              uint16_t ethertype,
+                              const uint8_t *payload, uint32_t paylen);
+    void      rxBaSetup(uint8_t tid, uint16_t ssn, uint16_t bufsize);
+    void      rxBaTeardown(uint8_t tid);
+    void      rxBaTeardownAll();
+    void      rxReorderInput(uint8_t tid, struct sk_buff *skb, uint16_t sn);
+    void      rxReorderArmTimer();
+    void      rxReorderFlushStale();
+    static void reorderTimerFired(OSObject *owner, IOTimerEventSource *t);
+
     /* Frame transmission helpers */
     bool      txMgmtFrame(const uint8_t *frame, uint32_t len);
     bool      txNullFunc(bool powerSave);
@@ -219,6 +233,25 @@ private:
     uint8_t  _baTid      = 0;      /* TID carrying aggregated data (BE)        */
     uint8_t  _baDialog   = 0;      /* rolling ADDBA-request dialog token       */
     uint16_t _baBufSize  = 64;     /* advertised BlockAck buffer/window size   */
+
+    /* RX A-MPDU reorder buffer — one per TID with an active downlink BA.
+     * Touched from the RX workloop (frame input) and the IEEE80211 workloop
+     * (flush timer, disconnect teardown), so guarded by _rxBaLock.  Frames are
+     * always delivered with the lock dropped to avoid holding it across the
+     * network-stack input path. */
+    static const uint16_t kRxBaMaxBuf   = 64;
+    static const uint8_t  kRxBaNumTid   = 8;   /* QoS data TIDs 0-7 */
+    static const uint32_t kReorderTimeoutMs = 60;
+    struct RxReorder {
+        bool      active;
+        uint16_t  headSn;          /* next expected SN (12-bit, mod 4096) */
+        uint16_t  bufSize;         /* reorder window size */
+        uint32_t  stored;          /* frames currently buffered */
+        struct sk_buff *buf[kRxBaMaxBuf];   /* indexed by SN % bufSize */
+    };
+    RxReorder *_rxBa[kRxBaNumTid] = {};
+    IOLock    *_rxBaLock      = nullptr;
+    IOTimerEventSource *_reorderTimer = nullptr;
 
     /* RSSI tracking */
     int      _rssi     = -100;
