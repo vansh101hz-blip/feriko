@@ -108,6 +108,7 @@ private:
 
     void      doAuthenticate();
     void      doAssociate();
+    void      setConnectedChandef(struct ieee80211_channel *chan);
     void      doHandshake(const uint8_t *eapol, uint32_t len);
     void      doDisconnect();
     void      clearKeys();
@@ -232,6 +233,7 @@ private:
     /* A-MPDU aggregation (BlockAck) state */
     bool     _txBaActive = false;  /* uplink TX BlockAck agreement established */
     uint8_t  _baTid      = 0;      /* TID carrying aggregated data (BE)        */
+    uint8_t  _connChanWidth = 20;  /* negotiated operating width: 20/40/80 MHz */
     uint8_t  _baDialog   = 0;      /* rolling ADDBA-request dialog token       */
     uint16_t _baBufSize  = 64;     /* advertised BlockAck buffer/window size   */
 

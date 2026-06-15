@@ -1572,6 +1572,77 @@ void RTW88IEEE80211::txStatus(struct sk_buff *skb)
     /* Nothing to do — skb freed by caller */
 }
 
+/*
+ * Pick the operating channel width for the connection and program it into
+ * hw->conf.chandef (consumed by rtw_set_channel via connect_hw_setup).
+ *
+ * We parse the AP's HT Operation (EID 61) and VHT Operation (EID 192) from the
+ * cached beacon IEs to learn the BSS width, then cap to what the chip supports
+ * (from its band caps).  Without this the link is pinned to 20 MHz — e.g. an
+ * 80 MHz VHT AP gives 173 Mbps (20 MHz MCS8) instead of 866 Mbps (80 MHz MCS9).
+ * TKIP links stay 20 MHz (HT disallowed — see htAllowed()).
+ */
+void RTW88IEEE80211::setConnectedChandef(struct ieee80211_channel *chan)
+{
+    _hw->conf.chandef.chan         = chan;
+    _hw->conf.chandef.width        = NL80211_CHAN_WIDTH_20_NOHT;
+    _hw->conf.chandef.center_freq1 = chan->center_freq;
+    _connChanWidth = 20;
+
+    if (!htAllowed())
+        return;
+
+    enum nl80211_band bnd =
+        (_targetBSS.channel > 14) ? NL80211_BAND_5GHZ : NL80211_BAND_2GHZ;
+    struct ieee80211_supported_band *sb =
+        (_hw->wiphy) ? _hw->wiphy->bands[bnd] : nullptr;
+    if (!sb) return;
+
+    bool chip40 = (sb->ht_cap.cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40) != 0;
+    bool chip80 = chip40 && bnd == NL80211_BAND_5GHZ && sb->vht_cap.vht_supported;
+
+    /* Parse HT/VHT Operation from the cached beacon IEs. */
+    int     sco        = 0;      /* HT secondary-channel offset: 1=above 3=below */
+    bool    htStaWidth = false;  /* HT "STA Channel Width" (40 MHz allowed)      */
+    int     vhtWidth   = 0;      /* VHT op channel width: >=1 means 80 MHz        */
+    uint8_t vhtSeg0    = 0;      /* VHT center-frequency segment 0 (center chan)  */
+    const uint8_t *ies = _targetBSS.ies;
+    uint16_t ielen     = _targetBSS.ies_len;
+    for (uint16_t i = 0; i + 2 <= ielen; ) {
+        uint8_t id = ies[i], len = ies[i + 1];
+        if ((uint32_t)i + 2 + len > ielen) break;
+        const uint8_t *d = ies + i + 2;
+        if (id == WLAN_EID_HT_OPERATION && len >= 2) {
+            sco        = d[1] & 0x03;
+            htStaWidth = (d[1] & 0x04) != 0;
+        } else if (id == WLAN_EID_VHT_OPERATION && len >= 3) {
+            vhtWidth = d[0];
+            vhtSeg0  = d[1];
+        }
+        i += 2 + len;
+    }
+
+    /* 40 MHz (HT). */
+    if (chip40 && htStaWidth && (sco == 1 || sco == 3)) {
+        _connChanWidth = 40;
+        _hw->conf.chandef.width = NL80211_CHAN_WIDTH_40;
+        _hw->conf.chandef.center_freq1 =
+            (uint32_t)((int)chan->center_freq + (sco == 1 ? 10 : -10));
+    }
+
+    /* 80 MHz (VHT) — overrides 40 when the AP runs an 80 MHz BSS.  width==1 is
+     * the 80/160/80+80 indicator; seg0 is the 80 MHz center either way, so we
+     * use it and cap to 80 (the chip's max).  Deprecated width 2/3 are ignored. */
+    if (chip80 && vhtWidth == 1 && vhtSeg0 != 0) {
+        _connChanWidth = 80;
+        _hw->conf.chandef.width = NL80211_CHAN_WIDTH_80;
+        _hw->conf.chandef.center_freq1 = (uint32_t)(5000 + 5 * vhtSeg0);
+    }
+
+    IOLog("rtw88: connected chandef: %u MHz (primary=%u cf1=%u)\n",
+          _connChanWidth, chan->center_freq, _hw->conf.chandef.center_freq1);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Scan                                                                */
 /* ------------------------------------------------------------------ */
@@ -1596,9 +1667,7 @@ void RTW88IEEE80211::restoreConnectedChannel()
     }
 
     if (chan) {
-        _hw->conf.chandef.chan         = chan;
-        _hw->conf.chandef.width        = NL80211_CHAN_WIDTH_20_NOHT;
-        _hw->conf.chandef.center_freq1 = chan->center_freq;
+        setConnectedChandef(chan);
     } else {
         IOLog("rtw88: scan restore: ch=%u not in band table\n",
               _targetBSS.channel);
@@ -1972,9 +2041,7 @@ void RTW88IEEE80211::doAuthenticate()
         }
     }
     if (chan) {
-        _hw->conf.chandef.chan         = chan;
-        _hw->conf.chandef.width        = NL80211_CHAN_WIDTH_20_NOHT;
-        _hw->conf.chandef.center_freq1 = chan->center_freq;
+        setConnectedChandef(chan);
         IOLog("rtw88: doAuthenticate: calling connect_hw_setup ch=%u\n",
               _targetBSS.channel);
         rtw88_connect_hw_setup(_hw, _vif, _targetBSS.bssid);
@@ -2071,7 +2138,10 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
              * non-empty rate-adaptation mask. */
             _sta->deflink.supp_rates[NL80211_BAND_2GHZ] = 0xFFF; /* CCK+OFDM */
             _sta->deflink.supp_rates[NL80211_BAND_5GHZ] = 0xFF;  /* OFDM     */
-            _sta->deflink.bandwidth = IEEE80211_STA_RX_BW_20;
+            _sta->deflink.bandwidth =
+                (_connChanWidth == 80) ? IEEE80211_STA_RX_BW_80 :
+                (_connChanWidth == 40) ? IEEE80211_STA_RX_BW_40 :
+                                         IEEE80211_STA_RX_BW_20;
 
             /* Mirror the chip's HT/VHT capabilities onto the peer STA so
              * rtw_update_sta_info() (invoked by sta_add) builds a firmware
@@ -2086,10 +2156,11 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
                 (_hw->wiphy) ? _hw->wiphy->bands[sta_band] : nullptr;
             if (htAllowed() && sband) {
                 _sta->deflink.ht_cap = sband->ht_cap;
-                _sta->deflink.ht_cap.cap &=
-                    ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
-                                IEEE80211_HT_CAP_SGI_40 |
-                                IEEE80211_HT_CAP_DSSSCCK40);
+                if (_connChanWidth < 40)
+                    _sta->deflink.ht_cap.cap &=
+                        ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+                                    IEEE80211_HT_CAP_SGI_40 |
+                                    IEEE80211_HT_CAP_DSSSCCK40);
                 if (sta_band == NL80211_BAND_5GHZ)
                     _sta->deflink.vht_cap = sband->vht_cap;
             }
@@ -2226,10 +2297,14 @@ bool RTW88IEEE80211::buildAssocReq(uint8_t *buf, uint32_t *len)
         body[0] = WLAN_EID_HT_CAPABILITY;
         body[1] = 26;
         uint8_t *p = body + 2;
-        /* HT Capabilities Info (2 bytes, LE) — pin to 20 MHz operation. */
-        uint16_t htcap = (uint16_t)(ht->cap & ~(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
-                                                IEEE80211_HT_CAP_SGI_40 |
-                                                IEEE80211_HT_CAP_DSSSCCK40));
+        /* HT Capabilities Info (2 bytes, LE).  Advertise 40 MHz only when we
+         * actually operate at >=40 MHz; otherwise clear the width bits to keep
+         * the AP at 20 MHz. */
+        uint16_t htcap = ht->cap;
+        if (_connChanWidth < 40)
+            htcap &= ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+                                 IEEE80211_HT_CAP_SGI_40 |
+                                 IEEE80211_HT_CAP_DSSSCCK40);
         p[0] = (uint8_t)(htcap & 0xff);
         p[1] = (uint8_t)(htcap >> 8);
         /* A-MPDU Parameters: max-length exponent (bits 1:0) | density (4:2). */
