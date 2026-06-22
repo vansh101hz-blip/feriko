@@ -1031,6 +1031,16 @@ void RTW88IEEE80211::processRxMgmt(struct sk_buff *skb)
                 kfree_skb(skb);
                 break;
             }
+            /* Log which frame and the reason code — the AP's reason for
+             * dropping us a few seconds after connect (e.g. excessive retries
+             * vs. class-3 violation) is the key diagnostic. */
+            {
+                const uint8_t *rb = skb->data + sizeof(*h3);
+                uint16_t reason = (skb->len >= sizeof(*h3) + 2) ?
+                                  (uint16_t)(rb[0] | (rb[1] << 8)) : 0;
+                IOLog("rtw88: %s from AP, reason=%u — disconnecting\n",
+                      (stype == 0x00C0) ? "deauth" : "disassoc", reason);
+            }
             clearKeys();
             _txBaActive = false;
             rxBaTeardownAll();
