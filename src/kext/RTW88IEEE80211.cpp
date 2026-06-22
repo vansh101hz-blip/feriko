@@ -1563,6 +1563,9 @@ void RTW88IEEE80211::rxReorderFlushStale()
     for (uint32_t i = 0; i < nout; i++)
         deliverDataFrame(out[i]);
 
+    if (_parent && nout)
+        _parent->flushRxQueue();   /* timer path: not covered by handleInterrupt */
+
     if (again)
         rxReorderArmTimer();
 }
