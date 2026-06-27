@@ -81,10 +81,6 @@ public:
 
     /* Called from RTW88IEEE80211 to deliver RX frames to macOS */
     void injectRxFrame(mbuf_t m);
-    /* Flush the batch of RX frames queued by injectRxFrame() in one shot.
-     * Called once per RX poll (end of handleInterrupt) and after the reorder
-     * timer releases frames — far cheaper than flushing per packet. */
-    void flushRxQueue();
     /* The workloop the RX/interrupt path runs on. RTW88IEEE80211 attaches its
      * RX reorder flush timer here so all frame delivery is serialized on one
      * thread (injectRxFrame's queue+flush is not safe against concurrent
@@ -141,7 +137,6 @@ private:
     IOInterruptEventSource *_intrSrc      = nullptr;
     IOTimerEventSource     *_debugTimer   = nullptr;
     IOEthernetInterface    *_iface        = nullptr;
-    bool                    _rxQueued     = false;  /* RX frames awaiting flush */
     IOGatedOutputQueue     *_txQueue      = nullptr;
 
     RTW88IEEE80211         *_ieee80211    = nullptr;

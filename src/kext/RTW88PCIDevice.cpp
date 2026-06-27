@@ -488,8 +488,6 @@ void RTW88PCIDevice::handleInterrupt(IOInterruptEventSource *src, int count)
 {
     if (_ieee80211)
         rtw88_trigger_interrupt();
-    /* Submit every RX frame this poll queued in a single batch. */
-    flushRxQueue();
 }
 
 /* ------------------------------------------------------------------ */
@@ -738,25 +736,15 @@ void RTW88PCIDevice::injectRxFrame(mbuf_t m)
         return;
     }
 
-    /* Queue the frame; the caller flushes the whole batch once per RX poll
-     * (flushRxQueue()).  Flushing per-packet here serialised every frame into
-     * dlil individually and roughly halved download throughput vs. upload. */
+    /* Queue + flush, matching the proven itlwm submission path.  Submitting
+     * via the input queue keeps frame delivery off whatever thread called us. */
     _iface->inputPacket(m, 0, IONetworkInterface::kInputOptionQueuePacket);
-    _rxQueued = true;
+    _iface->flushInputQueue();
 
     IONetworkData *nd = _iface->getNetworkData(kIONetworkStatsKey);
     if (nd) {
         IONetworkStats *stats = (IONetworkStats *)nd->getBuffer();
         if (stats) stats->inputPackets++;
-    }
-}
-
-/* Submit all frames queued since the last flush in one batch. */
-void RTW88PCIDevice::flushRxQueue()
-{
-    if (_rxQueued && _iface) {
-        _rxQueued = false;
-        _iface->flushInputQueue();
     }
 }
 
