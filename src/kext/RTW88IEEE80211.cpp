@@ -42,6 +42,7 @@ extern const struct rtw_chip_info rtw8821c_hw_spec;
 extern const struct rtw_chip_info rtw8821a_hw_spec;
 extern const struct rtw_chip_info rtw8812a_hw_spec;
 extern const struct rtw_chip_info rtw8814a_hw_spec;
+extern const struct rtw_chip_info rtw8723d_hw_spec;
 
 } /* extern "C" */
 
@@ -491,6 +492,7 @@ static const struct rtw88_pci_id_entry rtw88_pci_chip_table[] = {
     { 0x8821, &rtw8821a_hw_spec },  /* RTL8821AE */
     { 0x8812, &rtw8812a_hw_spec },  /* RTL8812AE */
     { 0x8813, &rtw8814a_hw_spec },  /* RTL8814AE */
+    { 0xD723, &rtw8723d_hw_spec },  /* RTL8723DE */
     { 0, nullptr }
 };
 

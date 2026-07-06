@@ -82,6 +82,9 @@ DRIVER_CFLAGS := \
     -DCONFIG_RTW88_8822BU=1 \
     -DCONFIG_RTW88_8822CU=1 \
     -DCONFIG_RTW88_8812AU=1 \
+    -DCONFIG_RTW88_8723DE=1 \
+    -DCONFIG_RTW88_8723D=1 \
+    -DCONFIG_RTW88_8723X=1 \
     -Wno-implicit-function-declaration \
     -Wno-int-conversion \
     -Wno-incompatible-pointer-types \
@@ -147,7 +150,11 @@ CHIP_SRCS := \
     $(LINUX_SRC)/rtw8821a.c \
     $(LINUX_SRC)/rtw8821a_table.c \
     $(LINUX_SRC)/rtw8821au.c \
-    $(LINUX_SRC)/rtw88xxa.c
+    $(LINUX_SRC)/rtw88xxa.c \
+    $(LINUX_SRC)/rtw8723d.c \
+    $(LINUX_SRC)/rtw8723d_table.c \
+    $(LINUX_SRC)/rtw8723de.c \
+    $(LINUX_SRC)/rtw8723x.c
 
 # Compat C implementation
 COMPAT_SRCS := \

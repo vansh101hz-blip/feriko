@@ -24,7 +24,8 @@ jobs:
         run: |
           cd Feixiao/firmware
           for fw in rtw8822b_fw.bin rtw8822c_fw.bin rtw8821c_fw.bin \
-                     rtw8821a_fw.bin rtw8812a_fw.bin rtw8814a_fw.bin; do
+                     rtw8821a_fw.bin rtw8812a_fw.bin rtw8814a_fw.bin \
+                     rtw8723d_fw.bin; do
             if [ ! -s "$fw" ]; then
               curl -sLO "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtw88/$fw"
             fi

@@ -201,6 +201,8 @@ const char *RTW88PCIDevice::chipDisplayName() const
         return "RTL8812AE";
     case 0x8813:
         return "RTL8814AE";
+    case 0xD723:
+        return "RTL8723DE";
     default:
         return "Realtek Wireless";
     }
