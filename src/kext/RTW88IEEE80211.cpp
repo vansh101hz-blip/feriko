@@ -1613,6 +1613,17 @@ void RTW88IEEE80211::setConnectedChandef(struct ieee80211_channel *chan)
     bool chip40 = (sb->ht_cap.cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40) != 0;
     bool chip80 = chip40 && bnd == NL80211_BAND_5GHZ && sb->vht_cap.vht_supported;
 
+    IOLog("rtw88: setConnectedChandef: band=%s ht_cap.cap=0x%x chip40=%d chip80=%d\n",
+          (bnd == NL80211_BAND_5GHZ) ? "5GHz" : "2.4GHz", sb->ht_cap.cap, chip40, chip80);
+
+    /* Fallback: Force HT40 for 2.4GHz chips that support HT but may not have the cap bit set
+     * (e.g., RTL8723D). This fixes slow speeds when the Linux driver doesn't properly init
+     * the HT_CAP_SUP_WIDTH_20_40 bit for certain chip variants. */
+    if (!chip40 && bnd == NL80211_BAND_2GHZ && sb->ht_cap.ht_supported) {
+        IOLog("rtw88: 2.4GHz HT supported but cap bit not set, forcing chip40=true\n");
+        chip40 = true;
+    }
+
     /* Parse HT/VHT Operation from the cached beacon IEs. */
     int     sco        = 0;      /* HT secondary-channel offset: 1=above 3=below */
     bool    htStaWidth = false;  /* HT "STA Channel Width" (40 MHz allowed)      */
