@@ -4,6 +4,7 @@
 
 #include "rtw88_compat.h"
 #include <stdarg.h>
+#include <stdint.h>
 #include <kern/thread_call.h>
 
 /* ------------------------------------------------------------------ */
@@ -112,6 +113,20 @@ boolean_t thread_call_cancel_wait(thread_call_t call)
     thread_call_cancel(call);
     IODelay(500);   /* 500 µs: enough for a running callback to exit */
     return thread_call_cancel(call);
+}
+
+/* Some Linux helper code references sign_extend32 as an exported symbol.
+ * macOS does not provide this; implement a local variant so the kext links.
+ * This mirrors the standard behaviour: sign-extend a value with the
+ * specified number of significant bits (1..31).  Return the extended
+ * value as a signed 64-bit long so callers get a compatible type.
+ */
+long sign_extend32(long value, unsigned int bit)
+{
+    if (bit == 0 || bit >= 32) return value;
+    int32_t v = (int32_t)value;
+    int shift = 32 - (int)bit;
+    return (long)((v << shift) >> shift);
 }
 
 /* ------------------------------------------------------------------ */
