@@ -1653,12 +1653,20 @@ void RTW88IEEE80211::setConnectedChandef(struct ieee80211_channel *chan)
         i += 2 + len;
     }
 
-    /* 40 MHz (HT). */
+    /* 40 MHz (HT). For RTL8723D on 2.4GHz, force 40MHz regardless of beacon
+     * HT operation advertisement to match Windows/Linux driver behavior. */
     if (chip40 && htStaWidth && (sco == 1 || sco == 3)) {
         _connChanWidth = 40;
         _hw->conf.chandef.width = NL80211_CHAN_WIDTH_40;
         _hw->conf.chandef.center_freq1 =
             (uint32_t)((int)chan->center_freq + (sco == 1 ? 10 : -10));
+    } else if (chip40 && bnd == NL80211_BAND_2GHZ && _pcidev && _pcidev->device == 0xD723) {
+        /* Force 40MHz for RTL8723D even if router doesn't advertise HT40 in beacon.
+         * Use secondary channel offset 1 (above) as default for 2.4GHz. */
+        IOLog("rtw88: RTL8723D forcing 40MHz channel (router not advertising HT40)\n");
+        _connChanWidth = 40;
+        _hw->conf.chandef.width = NL80211_CHAN_WIDTH_40;
+        _hw->conf.chandef.center_freq1 = (uint32_t)((int)chan->center_freq + 10);
     }
 
     /* 80 MHz (VHT) — overrides 40 when the AP runs an 80 MHz BSS.  width==1 is
