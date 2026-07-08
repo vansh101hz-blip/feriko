@@ -1618,13 +1618,12 @@ void RTW88IEEE80211::setConnectedChandef(struct ieee80211_channel *chan)
 
     /* Force HT40 for RTL8723D on 2.4GHz - this chip definitely supports HT40 but the
      * Linux driver may not properly set the HT_CAP_SUP_WIDTH_20_40 bit. Without this,
-     * the connection stays at 20MHz and speeds are capped at ~13Mbps instead of 40Mbps+. */
-    if (!chip40 && bnd == NL80211_BAND_2GHZ && _hw->priv) {
-        struct rtw_dev *rtwdev = (struct rtw_dev *)_hw->priv;
-        if (rtwdev->chip && rtwdev->chip->id == RTW_CHIP_TYPE_8723D) {
-            IOLog("rtw88: RTL8723D detected on 2.4GHz, forcing HT40 support\n");
-            chip40 = true;
-        }
+     * the connection stays at 20MHz and speeds are capped at ~13Mbps instead of 40Mbps+.
+     * We detect it by PCI device ID (0xD723) instead of chip type to avoid needing the
+     * full rtw_dev struct definition. */
+    if (!chip40 && bnd == NL80211_BAND_2GHZ && _pcidev && _pcidev->device == 0xD723) {
+        IOLog("rtw88: RTL8723D detected on 2.4GHz, forcing HT40 support\n");
+        chip40 = true;
     }
 
     /* Fallback: Force HT40 for other 2.4GHz chips that support HT but may not have the cap bit set */
