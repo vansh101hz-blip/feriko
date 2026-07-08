@@ -1616,9 +1616,18 @@ void RTW88IEEE80211::setConnectedChandef(struct ieee80211_channel *chan)
     IOLog("rtw88: setConnectedChandef: band=%s ht_cap.cap=0x%x chip40=%d chip80=%d\n",
           (bnd == NL80211_BAND_5GHZ) ? "5GHz" : "2.4GHz", sb->ht_cap.cap, chip40, chip80);
 
-    /* Fallback: Force HT40 for 2.4GHz chips that support HT but may not have the cap bit set
-     * (e.g., RTL8723D). This fixes slow speeds when the Linux driver doesn't properly init
-     * the HT_CAP_SUP_WIDTH_20_40 bit for certain chip variants. */
+    /* Force HT40 for RTL8723D on 2.4GHz - this chip definitely supports HT40 but the
+     * Linux driver may not properly set the HT_CAP_SUP_WIDTH_20_40 bit. Without this,
+     * the connection stays at 20MHz and speeds are capped at ~13Mbps instead of 40Mbps+. */
+    if (!chip40 && bnd == NL80211_BAND_2GHZ && _hw->priv) {
+        struct rtw_dev *rtwdev = (struct rtw_dev *)_hw->priv;
+        if (rtwdev->chip && rtwdev->chip->id == RTW_CHIP_TYPE_8723D) {
+            IOLog("rtw88: RTL8723D detected on 2.4GHz, forcing HT40 support\n");
+            chip40 = true;
+        }
+    }
+
+    /* Fallback: Force HT40 for other 2.4GHz chips that support HT but may not have the cap bit set */
     if (!chip40 && bnd == NL80211_BAND_2GHZ && sb->ht_cap.ht_supported) {
         IOLog("rtw88: 2.4GHz HT supported but cap bit not set, forcing chip40=true\n");
         chip40 = true;
