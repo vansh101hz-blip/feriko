@@ -308,6 +308,12 @@ bool RTW88PCIDevice::start(IOService *provider)
     _pciDev->setBusMasterEnable(true);
     _pciDev->setMemoryEnable(true);
 
+    /* Increase PCI latency timer to reduce DMA timeout errors.
+     * Realtek 8723DE is prone to PCI bus timeouts under load.
+     * Default is often 0x00 (32 clocks), increase to 0x40 (64 clocks)
+     * or 0x80 (128 clocks) for better DMA performance. */
+    _pciDev->configWrite8(kIOPCIConfigLatencyTimer, 0x80);
+
     /* Map BAR2 — rtw88 driver hardcodes bar_id=2 in pci.c */
     _mmioMap = _pciDev->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
     if (!_mmioMap) {
