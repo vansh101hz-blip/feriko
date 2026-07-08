@@ -1132,9 +1132,10 @@ static bool rtw88RsnSelectCcmpPsk(const uint8_t *rsn, uint8_t len,
     if (!hasCcmp || !hasPsk)
         return false;
 
-    if (group != WLAN_CIPHER_SUITE_CCMP &&
-        group != WLAN_CIPHER_SUITE_TKIP)
-        group = WLAN_CIPHER_SUITE_CCMP;
+    /* Always prefer CCMP for group cipher to maximize throughput.
+     * TKIP has significant overhead and reduces upload speeds.
+     * Even if router advertises TKIP group cipher, we negotiate CCMP. */
+    group = WLAN_CIPHER_SUITE_CCMP;
 
     if (pairwise_cipher)
         *pairwise_cipher = WLAN_CIPHER_SUITE_CCMP;
