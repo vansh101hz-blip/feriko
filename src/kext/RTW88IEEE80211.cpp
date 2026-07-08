@@ -2721,14 +2721,15 @@ void RTW88IEEE80211::sendAddbaResponse(uint8_t tid, uint8_t dialog,
 }
 
 /* HT/VHT and A-MPDU are not used with TKIP.  An AP whose BSS uses TKIP
- * (pairwise or group cipher) operates in a non-HT mode; advertising HT to it
- * stalls the 4-way handshake or draws a deauth.  Open and CCMP links use HT. */
+ * as the pairwise cipher operates in a non-HT mode; advertising HT to it
+ * stalls the 4-way handshake or draws a deauth.  However, TKIP as the group
+ * cipher is common in mixed-mode WPA/WPA2 networks and does not block HT.
+ * Open and CCMP links use HT.  This matches Linux driver behavior. */
 bool RTW88IEEE80211::htAllowed() const
 {
-    /* TKIP as either the pairwise or group cipher rules out HT (open and CCMP
-     * links are fine).  _targetBSS.cipher/group_cipher are 0 for open networks. */
-    if (_targetBSS.cipher       == WLAN_CIPHER_SUITE_TKIP) return false;
-    if (_targetBSS.group_cipher == WLAN_CIPHER_SUITE_TKIP) return false;
+    /* Only block HT when TKIP is the pairwise cipher.  TKIP as group cipher
+     * is allowed with HT (common in mixed-mode WPA/WPA2 networks). */
+    if (_targetBSS.cipher == WLAN_CIPHER_SUITE_TKIP) return false;
     return true;
 }
 
