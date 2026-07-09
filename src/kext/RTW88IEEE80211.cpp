@@ -706,6 +706,13 @@ bool RTW88IEEE80211::installKey(struct ieee80211_key_conf **slot, bool pairwise,
     key->cipher = cipher;
     key->keyidx = (s8)keyidx;
     key->flags = pairwise ? IEEE80211_KEY_FLAG_PAIRWISE : 0;
+    /* Match Linux rtw88 driver key flag handling from mac80211.c:
+     * - GENERATE_IV is set for all keys during SET_KEY
+     * - GENERATE_MMIC is set only for TKIP
+     * - SW_MGMT_TX is set for CCMP (not needed for our use case) */
+    key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
+    if (cipher == WLAN_CIPHER_SUITE_TKIP)
+        key->flags |= IEEE80211_KEY_FLAG_GENERATE_MMIC;
     key->keylen = tk_len;
     key->iv_len = 8;
     key->icv_len = (cipher == WLAN_CIPHER_SUITE_TKIP) ? 4 : 8;
@@ -1132,10 +1139,9 @@ static bool rtw88RsnSelectCcmpPsk(const uint8_t *rsn, uint8_t len,
     if (!hasCcmp || !hasPsk)
         return false;
 
-    /* Always prefer CCMP for group cipher to maximize throughput.
-     * TKIP has significant overhead and reduces upload speeds.
-     * Even if router advertises TKIP group cipher, we negotiate CCMP. */
-    group = WLAN_CIPHER_SUITE_CCMP;
+    if (group != WLAN_CIPHER_SUITE_CCMP &&
+        group != WLAN_CIPHER_SUITE_TKIP)
+        group = WLAN_CIPHER_SUITE_CCMP;
 
     if (pairwise_cipher)
         *pairwise_cipher = WLAN_CIPHER_SUITE_CCMP;
@@ -2201,6 +2207,12 @@ void RTW88IEEE80211::processAssocResponse(struct sk_buff *skb)
                         ~(uint16_t)(IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
                                     IEEE80211_HT_CAP_SGI_40 |
                                     IEEE80211_HT_CAP_DSSSCCK40);
+                else {
+                    /* For 40MHz, ensure SGI_40 is enabled to improve throughput.
+                     * SGI reduces guard interval from 800ns to 400ns, increasing
+                     * data rate by ~10-20%. */
+                    _sta->deflink.ht_cap.cap |= IEEE80211_HT_CAP_SGI_40;
+                }
                 if (sta_band == NL80211_BAND_5GHZ)
                     _sta->deflink.vht_cap = sband->vht_cap;
             }
